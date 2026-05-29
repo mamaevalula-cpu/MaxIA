@@ -445,6 +445,9 @@ body.loading #global-loader{opacity:1}
     <div class="hchip hchip-b" id="chip-cost">$0.0000</div>
     <div class="hchip hchip-g" id="chip-balance">$—</div>
     <div class="hchip hchip-b" id="chip-pnl">PnL $0</div>
+    <div class="hchip hchip-b" id="chip-btc" style="cursor:default">BTC —</div>
+    <div class="hchip hchip-b" id="chip-eth" style="cursor:default">ETH —</div>
+    <div class="hchip hchip-b" id="chip-sol" style="cursor:default">SOL —</div>
   </div>
   <span id="hdr-time">--:--:--</span>
   <button id="hdr-refresh" onclick="refreshAll()">↻ Обновить</button>
@@ -511,6 +514,7 @@ body.loading #global-loader{opacity:1}
 
 <!-- АРБИТРАЖ ──────────────────────────────────────────────────── -->
 <div id="sc-arb" class="sc">
+  <div id="arb-top" style="margin-bottom:14px"></div>
   <div class="g4" id="arb-kpis"></div>
   <div class="card" style="margin-bottom:14px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
@@ -527,6 +531,7 @@ body.loading #global-loader{opacity:1}
 <!-- ДЕНЬГИ ──────────────────────────────────────────────────── -->
 <div id="sc-money" class="sc">
   <div class="g4" id="money-kpis"></div>
+  <div id="money-sentiment" style="margin-bottom:14px"></div>
   <div class="g2" style="margin-bottom:14px">
     <div class="card">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
@@ -651,6 +656,24 @@ body.loading #global-loader{opacity:1}
     <div class="card">
       <div class="card-title"><span class="card-title-ico">🔮</span>Торговые сигналы (15m)</div>
       <div id="dash-signals"><div class="loading-wrap"><div class="loader"></div></div></div>
+    </div>
+  </div>
+  <div class="g2" style="margin-top:14px">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">💬</span>Последние сообщения</div>
+      <div id="dash-chat-feed" style="max-height:220px;overflow-y:auto;min-height:60px"></div>
+      <div style="margin-top:10px;display:flex;gap:6px">
+        <input class="inp" id="dash-chat-inp" placeholder="Быстрое сообщение агенту..." style="flex:1;font-size:12px" onkeydown="if(event.key==='Enter'){event.preventDefault();dashQuickChat()}">
+        <button class="btn btn-g" onclick="dashQuickChat()">▶</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">⚡</span>Активные задачи</div>
+      <div id="dash-tasks-feed" style="max-height:220px;overflow-y:auto;min-height:60px"></div>
+      <div style="margin-top:10px;display:flex;gap:6px">
+        <input class="inp" id="dash-task-inp" placeholder="Новая задача..." style="flex:1;font-size:12px" onkeydown="if(event.key==='Enter'){event.preventDefault();dashSubmitTask()}">
+        <button class="btn btn-b" onclick="dashSubmitTask()">+ Задача</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1211,6 +1234,7 @@ body.loading #global-loader{opacity:1}
 <!-- ═══════════════════ EMAIL ═══════════════════ -->
 <div id="sc-email" class="sc">
   <div class="g4" id="em-kpis"></div>
+  <div id="em-setup" style="margin-bottom:14px"></div>
   <div class="g2" style="margin-bottom:14px">
     <div class="card">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
@@ -1222,6 +1246,18 @@ body.loading #global-loader{opacity:1}
     <div class="card">
       <div class="card-title"><span class="card-title-ico">🔑</span>Найденные API ключи</div>
       <div id="em-keys"><div class="loading-wrap"><div class="loader"></div></div></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title"><span class="card-title-ico">✍️</span>Составить письмо (SMTP)</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+      <input class="inp" id="em-to" placeholder="Кому: email@example.com" style="font-size:12px">
+      <input class="inp" id="em-subj" placeholder="Тема письма..." style="font-size:12px">
+    </div>
+    <textarea class="inp" id="em-body" rows="4" placeholder="Текст письма..." style="font-size:12px;margin-bottom:8px"></textarea>
+    <div style="display:flex;align-items:center;gap:8px">
+      <button class="btn btn-g" onclick="sendEmail()">📤 Отправить</button>
+      <div id="em-fb" style="font-size:12px;flex:1"></div>
     </div>
   </div>
 </div>
@@ -1348,6 +1384,15 @@ async function refreshHeader() {
   const pnlEl = $('chip-pnl');
   pnlEl.textContent = 'PnL '+(pnl>=0?'+':'')+fmtN(pnl)+'$';
   pnlEl.className = 'hchip '+(pnl>0?'hchip-g':pnl<0?'hchip-r':'hchip-b');
+  // Crypto price chips
+  api('/api/money/prices').catch(()=>null).then(pr=>{
+    if(!pr) return;
+    const px=pr.prices&&typeof pr.prices==='object'?pr.prices:pr;
+    const btc=+(px.BTC||px.BTCUSDT||0), eth=+(px.ETH||px.ETHUSDT||0), sol=+(px.SOL||px.SOLUSDT||0);
+    if(btc&&$('chip-btc')) { $('chip-btc').textContent='BTC $'+(btc>1000?Math.round(btc).toLocaleString('ru-RU'):btc.toFixed(2)); }
+    if(eth&&$('chip-eth')) { $('chip-eth').textContent='ETH $'+(eth>100?Math.round(eth).toLocaleString('ru-RU'):eth.toFixed(2)); }
+    if(sol&&$('chip-sol')) { $('chip-sol').textContent='SOL $'+sol.toFixed(2); }
+  });
 }
 window.__ST2__ = window.__ST__;
 refreshHeader();
@@ -1584,6 +1629,70 @@ async function loadDash() {
   // Independent 30s poll ? updates service strip & circuit widget between full tab refreshes
   clearInterval(window._svcPollT);
   window._svcPollT = setInterval(loadServices, 30000);
+
+  // Activity feeds
+  Promise.all([
+    api('/api/chat/history').catch(()=>null),
+    api('/api/tasks').catch(()=>api('/api/tasks/queue').catch(()=>null)),
+  ]).then(([ch, tsk]) => {
+    const msgs = ((ch&&(ch.messages||ch.history||ch))||[]).filter(m=>m&&(m.content||m.text||m.message)).slice(-6);
+    const cfEl = $('dash-chat-feed');
+    if(cfEl) cfEl.innerHTML = msgs.length ? msgs.map(m => {
+      const isU = (m.role||m.sender||'user')=='user';
+      const txt = esc((m.content||m.text||m.message||'...').slice(0,90));
+      return '<div style="padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:11px">'
+        +'<span style="color:'+(isU?'var(--acc)':'var(--grn)')+';font-weight:700">'+esc(isU?'👤 Вы':'🤖 AI')+'</span>'
+        +'<span style="color:var(--txt2);margin-left:5px">'+txt+'</span>'
+        +'</div>';
+    }).join('') : '<div style="color:var(--txt3);padding:12px;font-size:12px;text-align:center">💬 История чата пуста</div>';
+    const tasks = ((tsk&&(tsk.tasks||[]))||[]).slice(0,7);
+    const tfEl = $('dash-tasks-feed');
+    if(tfEl) {
+      const stC = {running:'var(--grn)',pending:'var(--yel)',completed:'var(--txt3)',failed:'var(--red)'};
+      const stI = {running:'▶',pending:'⏳',completed:'✓',failed:'✗'};
+      tfEl.innerHTML = tasks.length ? tasks.map(t => {
+        const st = t.status||t.state||'pending';
+        const goal = esc((t.goal||t.title||t.description||t.objective||'...').slice(0,65));
+        return '<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04)">'
+          +'<span style="font-size:11px;color:'+(stC[st]||'var(--txt3)')+';flex-shrink:0">'+esc(stI[st]||'•')+'</span>'
+          +'<span style="font-size:11px;color:var(--txt2);flex:1">'+goal+'</span>'
+          +bdg(st,st==='running'?'g':st==='pending'?'y':st==='failed'?'r':'b')
+          +'</div>';
+      }).join('') : '<div style="color:var(--txt3);padding:12px;font-size:12px;text-align:center">⚡ Задач нет</div>';
+    }
+  });
+}
+
+// ─── Dashboard quick actions ──────────────────────────────────────────────────
+async function dashQuickChat() {
+  const inp = $('dash-chat-inp');
+  const msg = (inp&&inp.value||''). trim();
+  if(!msg) return;
+  inp.value = '';
+  inp.disabled = true;
+  const cfEl = $('dash-chat-feed');
+  if(cfEl) {
+    cfEl.innerHTML = '<div style="padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:11px"><span style="color:var(--acc);font-weight:700">👤 Вы</span><span style="color:var(--txt2);margin-left:5px">'+esc(msg.slice(0,90))+'</span></div>'
+      + cfEl.innerHTML;
+  }
+  await api('/api/chat/message',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})}).catch(()=>null);
+  inp.disabled = false;
+  inp.focus();
+  setTimeout(()=>{ loaded.dash=false; loadDash(); },1800);
+}
+
+async function dashSubmitTask() {
+  const inp = $('dash-task-inp');
+  const goal = (inp&&inp.value||''). trim();
+  if(!goal) return;
+  inp.value = '';
+  inp.disabled = true;
+  const r = await api('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({goal,tags:['dashboard']})}).catch(()=>null);
+  inp.disabled = false;
+  inp.focus();
+  if(r) { showToast('✅ Задача создана','g','⚡',3000); }
+  else   { showToast('❌ Ошибка создания задачи','r','!',3000); }
+  setTimeout(()=>{ loaded.dash=false; loadDash(); },600);
 }
 
 // ─── Services Catalog tab ────────────────────────────────────────────────────
@@ -3300,6 +3409,22 @@ async function loadEmail() {
   ]);
 
   const s=status||{};
+  const setupEl=$('em-setup');
+  if(setupEl) {
+    const connected=!!(s.connected||s.status==='ok'||s.imap_ok);
+    if(!connected) {
+      setupEl.innerHTML='<div class="card" style="border-left:3px solid var(--yel);background:rgba(255,204,0,.03)">'
+        +'<div class="card-title" style="margin-bottom:10px"><span class="card-title-ico">⚙️</span>Настройка Email</div>'
+        +'<div style="font-size:12px;color:var(--txt2);margin-bottom:10px">IMAP/SMTP не подключён. Настройте переменные окружения на сервере:</div>'
+        +'<div style="background:#030810;border-radius:6px;padding:12px;font-family:Consolas,monospace;font-size:11px;color:var(--acc);line-height:1.8">'
+        +'EMAIL_ADDRESS=your@gmail.com<br>EMAIL_PASSWORD=app_password<br>IMAP_HOST=imap.gmail.com<br>IMAP_PORT=993<br>SMTP_HOST=smtp.gmail.com<br>SMTP_PORT=587'
+        +'</div>'
+        +'<div style="font-size:11px;color:var(--txt3);margin-top:8px">💡 Для Gmail создайте App Password: Аккаунт → Безопасность → Двухэтапная верификация → Пароли приложений</div>'
+        +'</div>';
+    } else {
+      setupEl.innerHTML = '';
+    }
+  }
   const emKpis=$('em-kpis');
   if(emKpis) emKpis.innerHTML=[
     statCard(s.inbox_count||s.total||s.total_emails||0,'Всего писем','','stat-acc'),
@@ -3348,6 +3473,20 @@ async function loadEmail() {
       keysEl.innerHTML='<div style="text-align:center;padding:20px;color:var(--txt3)">🔑 Ключей не найдено</div>';
     }
   }
+}
+
+// ─── Email compose ───────────────────────────────────────────────
+async function sendEmail() {
+  const to=($('em-to')&&$('em-to').value||'').trim();
+  const subj=($('em-subj')&&$('em-subj').value||'').trim();
+  const body=($('em-body')&&$('em-body').value||'').trim();
+  const fb=$('em-fb');
+  if(!to||!subj){if(fb)fb.innerHTML='<span style="color:var(--yel)">⚠ Укажите адрес и тему</span>';return;}
+  if(fb)fb.innerHTML='<span style="color:var(--txt3)">⏳ Отправка...</span>';
+  const r=await api('/api/email/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to,subject:subj,body})}).catch(()=>null);
+  if(fb)fb.innerHTML=r&&r.ok!==false?'<span style="color:var(--grn)">✅ Отправлено!</span>':'<span style="color:var(--red)">❌ Ошибка отправки</span>';
+  if(r&&r.ok!==false){if($('em-to'))$('em-to').value='';if($('em-subj'))$('em-subj').value='';if($('em-body'))$('em-body').value='';}
+  setTimeout(()=>{if(fb)fb.innerHTML='';},4000);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -3481,6 +3620,33 @@ async function loadArb(){
       ].join('');
     }
 
+    // Top opportunities banner
+    const arbTop=$('arb-top');
+    const profOpps=[...opps].filter(o=>o.profitable&&o.tradeable!==false).sort((a,b)=>{
+      const pa=+(a.profit_est||a.profit_pct||a.profit||0),pb=+(b.profit_est||b.profit_pct||b.profit||0);
+      return pb-pa;
+    });
+    if(arbTop&&profOpps.length) {
+      arbTop.innerHTML='<div class="sec-title"><span>🏆 Лучшие арбитражные возможности</span></div>'
+        +'<div class="g3">'
+        +profOpps.slice(0,3).map((o,i)=>{
+          const p=+(o.profit_est||o.profit_pct||o.profit||0);
+          const pDisp=p>100?(p/100).toFixed(2):p.toFixed(2);
+          const medals=['🥇','🥈','🥉'];
+          const dir=o.direction||o.type||'spot-perp';
+          return '<div class="card" style="border-left:3px solid '+(i===0?'var(--grn)':i===1?'var(--yel)':'var(--acc)')+';background:rgba(0,232,122,.03)">'
+            +'<div style="font-size:18px;font-weight:800;margin-bottom:4px">'+medals[i]+' '+esc(o.symbol||'')+'</div>'
+            +'<div style="font-size:22px;font-weight:900;color:var(--grn);margin:6px 0">'+pDisp+'%</div>'
+            +'<div style="font-size:11px;color:var(--txt3);margin-bottom:4px">'+esc(dir)+'</div>'
+            +(o.spread_pct!=null?'<div style="font-size:11px;color:var(--txt2)">Спред: '+Math.abs(+o.spread_pct).toFixed(4)+'%</div>':'')
+            +(o.funding_rate?'<div style="font-size:11px;color:var(--acc)">FR: '+(+(o.funding_rate)*100).toFixed(4)+'%</div>':'')
+            +'</div>';
+        }).join('')
+        +'</div>';
+    } else if(arbTop) {
+      arbTop.innerHTML = '';
+    }
+
     // Table
     const el=$('arb-list');
     if(!el) return;
@@ -3551,6 +3717,37 @@ async function loadMoney(){
     let bal='—';
     if(port&&port.summary){ const m=port.summary.match(/(\d+\.\d+)\s*USDT/); if(m) bal='$'+m[1]; }
     else if(port&&port.balance) bal='$'+(+port.balance).toFixed(2);
+
+    // Market sentiment card
+    const sentEl=$('money-sentiment');
+    if(sentEl&&sigs&&sigs.length){
+      const bulls=sigs.filter(s=>s.signal==='BUY'||s.signal==='STRONG_BUY').length;
+      const bears=sigs.filter(s=>s.signal==='SELL'||s.signal==='STRONG_SELL').length;
+      const holds=sigs.length-bulls-bears;
+      const avgRsi=sigs.reduce((s,x)=>s+(+(x.rsi||50)),0)/(sigs.length||1);
+      const bearish=sigs.filter(s=>s.trend==='bearish').length;
+      const bullish=sigs.filter(s=>s.trend==='bullish').length;
+      const moodLabel=bullish>bearish?'🟢 БЫЧИЙ':'🔴 МЕДВЕЖИЙ';
+      const moodColor=bullish>bearish?'var(--grn)':'var(--red)';
+      const rsiLabel=avgRsi>70?'Перекуплен':avgRsi<30?'Перепродан':'Нейтральный';
+      sentEl.innerHTML='<div class="card" style="background:linear-gradient(135deg,rgba(0,212,255,.03),rgba(0,232,122,.03))">'
+        +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
+        +'<div class="card-title" style="margin:0"><span class="card-title-ico">🌡</span>Рыночный сентимент</div>'
+        +'<span style="font-size:16px;font-weight:800;color:'+moodColor+'">'+moodLabel+'</span>'
+        +'</div>'
+        +'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;text-align:center">'
+        +'<div style="padding:8px;background:rgba(0,232,122,.08);border-radius:8px"><div style="font-size:18px;font-weight:800;color:var(--grn)">'+bulls+'</div><div style="font-size:10px;color:var(--txt3)">Покупать</div></div>'
+        +'<div style="padding:8px;background:rgba(255,45,85,.08);border-radius:8px"><div style="font-size:18px;font-weight:800;color:var(--red)">'+bears+'</div><div style="font-size:10px;color:var(--txt3)">Продавать</div></div>'
+        +'<div style="padding:8px;background:rgba(255,255,255,.04);border-radius:8px"><div style="font-size:18px;font-weight:800;color:var(--txt2)">'+holds+'</div><div style="font-size:10px;color:var(--txt3)">Держать</div></div>'
+        +'<div style="padding:8px;background:rgba(0,212,255,.08);border-radius:8px"><div style="font-size:18px;font-weight:800;color:var(--acc)">'+avgRsi.toFixed(0)+'</div><div style="font-size:10px;color:var(--txt3)">Avg RSI\'\u00b7'+rsiLabel+'</div></div>'
+        +'</div>'
+        +(sigs.filter(s=>s.signal!=='HOLD').length?'<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">'
+          +sigs.filter(s=>s.signal!=='HOLD').map(s=>{
+            const isBuy=s.signal==='BUY'||s.signal==='STRONG_BUY';
+            return '<span style="font-size:10px;padding:2px 8px;border-radius:12px;background:'+(isBuy?'rgba(0,232,122,.15)':'rgba(255,45,85,.15)')+';color:'+(isBuy?'var(--grn)':'var(--red)')+'">'+esc(s.symbol)+' '+esc(s.signal)+'</span>';
+          }).join('')+'</div>':'')
+        +'</div>';
+    } else if(sentEl) { sentEl.innerHTML=''; }
 
     // KPIs
     const kpis=$('money-kpis');
