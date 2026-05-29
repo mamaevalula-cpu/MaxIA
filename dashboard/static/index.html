@@ -448,6 +448,7 @@ body.loading #global-loader{opacity:1}
     <div class="hchip hchip-b" id="chip-btc" style="cursor:default">BTC —</div>
     <div class="hchip hchip-b" id="chip-eth" style="cursor:default">ETH —</div>
     <div class="hchip hchip-b" id="chip-sol" style="cursor:default">SOL —</div>
+    <button id="chip-notify" onclick="go('dash')" title="Ожидающие действия" style="background:rgba(255,204,0,.08);border:1px solid rgba(255,204,0,.2);color:var(--yel);padding:3px 9px;border-radius:8px;cursor:pointer;font-size:12px;position:relative;display:flex;align-items:center;gap:4px">🔔<span id="notify-count" style="display:none;background:var(--red);color:#fff;font-size:9px;font-weight:800;border-radius:50%;padding:0 4px;min-width:14px;text-align:center;line-height:14px;position:absolute;top:-4px;right:-4px">0</span></button>
   </div>
   <span id="hdr-time">--:--:--</span>
   <button id="hdr-refresh" onclick="refreshAll()">↻ Обновить</button>
@@ -516,6 +517,13 @@ body.loading #global-loader{opacity:1}
 <div id="sc-arb" class="sc">
   <div id="arb-top" style="margin-bottom:14px"></div>
   <div class="g4" id="arb-kpis"></div>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+    <span style="font-size:11px;color:var(--txt3)">Сортировка:</span>
+    <button class="btn btn-sm btn-g" onclick="sortArb('profit')" id="arb-sort-profit">📈 Профит</button>
+    <button class="btn btn-sm" onclick="sortArb('spread')" id="arb-sort-spread">↔ Спред</button>
+    <button class="btn btn-sm" onclick="sortArb('funding')" id="arb-sort-funding">💸 FR</button>
+    <span id="arb-sort-info" style="font-size:10px;color:var(--txt3);margin-left:4px"></span>
+  </div>
   <div class="card" style="margin-bottom:14px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
       <div class="card-title" style="margin:0"><span class="card-title-ico">📊</span>Арбитражные возможности</div>
@@ -709,6 +717,7 @@ body.loading #global-loader{opacity:1}
     <div class="card-title"><span class="card-title-ico">💡</span>Потоки доходов (v5)</div>
     <div id="rev-v5-streams"><div class="loading-wrap"><div class="loader"></div></div></div>
   </div>
+  <div id="rev-projection" style="margin-top:14px"></div>
   <div class="card">
     <div class="card-title"><span class="card-title-ico">🌍</span>Фазы глобального роста</div>
     <div id="rev-phases"></div>
@@ -1416,6 +1425,26 @@ async function refreshHeader() {
   const pnlEl = $('chip-pnl');
   pnlEl.textContent = 'PnL '+(pnl>=0?'+':'')+fmtN(pnl)+'$';
   pnlEl.className = 'hchip '+(pnl>0?'hchip-g':pnl<0?'hchip-r':'hchip-b');
+  // Notification badge
+  api('/api/actions/pending').catch(()=>null).then(acts=>{
+    const arr=Array.isArray(acts)?acts:(acts&&acts.actions)||[];
+    const badge=$('notify-count');
+    if(badge){
+      if(arr.length>0){
+        badge.textContent=arr.length;
+        badge.style.display='inline-block';
+        $('chip-notify').style.borderColor='rgba(255,45,85,.5)';
+        $('chip-notify').style.background='rgba(255,45,85,.1)';
+        $('chip-notify').style.color='var(--red)';
+      } else {
+        badge.style.display='none';
+        $('chip-notify').style.borderColor='rgba(255,204,0,.2)';
+        $('chip-notify').style.background='rgba(255,204,0,.08)';
+        $('chip-notify').style.color='var(--yel)';
+      }
+    }
+  });
+
   // Crypto price chips
   api('/api/money/prices').catch(()=>null).then(pr=>{
     if(!pr) return;
@@ -1733,6 +1762,50 @@ async function loadDash() {
   });
 }
 
+// ─── Arb sort ────────────────────────────────────────────────────────────────
+window._arbSort='profit';
+window._arbOpps=[];
+function sortArb(by) {
+  window._arbSort=by;
+  ['profit','spread','funding'].forEach(b=>{
+    const el=$('arb-sort-'+b);
+    if(el) el.className='btn btn-sm'+(b===by?' btn-g':'');
+  });
+  renderArbTable(window._arbOpps);
+}
+function renderArbTable(opps) {
+  window._arbOpps=opps||[];
+  const by=window._arbSort||'profit';
+  const sorted=[...opps].sort((a,b)=>{
+    if(by==='profit') return (+(b.profit_est||b.profit_pct||b.profit||0))-(+(a.profit_est||a.profit_pct||a.profit||0));
+    if(by==='spread') return Math.abs(+(b.spread_pct||0))-Math.abs(+(a.spread_pct||0));
+    if(by==='funding') return Math.abs(+(b.funding_rate||0))-Math.abs(+(a.funding_rate||0));
+    return 0;
+  });
+  const si=$('arb-sort-info');
+  if(si) si.textContent='Показано '+Math.min(sorted.length,20)+' из '+opps.length;
+  const el=$('arb-list');
+  if(!el) return;
+  if(!sorted.length) {
+    el.innerHTML='<div style="text-align:center;padding:30px;color:var(--txt3)">💤 Нет арбитражных возможностей</div>';
+    return;
+  }
+  el.innerHTML=sorted.slice(0,20).map(o=>{
+    const p=+(o.profit_est||o.profit_pct||o.profit||0);
+    const pDisp=p>100?(p/100).toFixed(2):p.toFixed(3);
+    const dir=esc(o.direction||o.type||'spot-perp');
+    const isProf=o.profitable&&o.tradeable!==false;
+    return '<tr style="border-bottom:1px solid var(--brd2)">'
+      +'<td style="font-weight:700;color:var(--acc)">'+esc(o.symbol||'')+'</td>'
+      +'<td><span style="font-size:10px;color:var(--txt3)">'+dir+'</span></td>'
+      +'<td style="color:var(--grn);font-weight:700">'+(pDisp)+'%</td>'
+      +(o.spread_pct!=null?'<td style="color:var(--txt2)">'+(+(o.spread_pct)*100).toFixed(3)+'%</td>':'<td>—</td>')
+      +(o.funding_rate?'<td style="color:var(--acc)">'+(+(o.funding_rate)*100).toFixed(4)+'%</td>':'<td>—</td>')
+      +'<td>'+bdg(isProf?'ТОРГ':'НЕТ',isProf?'g':'r')+'</td>'
+      +'</tr>';
+  }).join('');
+}
+
 // ─── Approve pending action ───────────────────────────────────────────────────
 async function approveAction(id) {
   const r=await api('/api/actions/approve/'+id,{method:'POST'}).catch(()=>null);
@@ -2046,6 +2119,33 @@ async function loadRevenue() {
   const realToday = v5e ? (+(v5e.today_usd||0)) : 0;
   const realTotal = v5e ? (+(v5e.total_usd||0)) : 0;
   const projMonthly = realToday > 0 ? realToday * 30 : totalMonthly;
+  // Revenue projection card
+  const projEl=$('rev-projection');
+  if(projEl) {
+    const todayEst=realToday>0?realToday:earnDaily>0?earnDaily:pnl>0?pnl:0;
+    const weekEst=(todayEst*7).toFixed(2);
+    const monthEst=projMonthly.toFixed(2);
+    const yearEst=(projMonthly*12).toFixed(0);
+    const earnAnnual=(earnMonthly*12).toFixed(0);
+    projEl.innerHTML='<div class="card" style="background:linear-gradient(135deg,rgba(0,232,122,.03),rgba(0,212,255,.03));border-left:3px solid var(--grn)">'
+      +'<div class="card-title" style="margin-bottom:12px"><span class="card-title-ico">🔮</span>Прогноз доходов</div>'
+      +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:12px">'
+      +[
+        {t:'Сегодня',v:'$'+(todayEst).toFixed(4),c:'var(--txt2)'},
+        {t:'7 дней',v:'$'+weekEst,c:'var(--acc)'},
+        {t:'30 дней',v:'$'+monthEst,c:'var(--yel)'},
+        {t:'12 месяцев',v:'$'+fmtN(+yearEst),c:'var(--grn)'},
+        {t:'Earn/год',v:'$'+fmtN(+earnAnnual),c:'var(--pur)'},
+        {t:'Баланс USDT',v:'$'+bal.toFixed(2),c:'var(--grn)'},
+      ].map(p=>'<div style="text-align:center;padding:10px;background:rgba(255,255,255,.02);border-radius:8px">'
+        +'<div style="font-size:18px;font-weight:800;color:'+p.c+'">'+esc(p.v)+'</div>'
+        +'<div style="font-size:10px;color:var(--txt3);margin-top:3px">'+esc(p.t)+'</div>'
+        +'</div>').join('')
+      +'</div>'
+      +(realToday>0?'<div style="font-size:10px;color:var(--grn);margin-top:8px">💰 Заработано сегодня: $'+realToday.toFixed(4)+'</div>':'')
+      +'</div>';
+  }
+
   $('rev-phases').innerHTML = phases.map((p,pi) => {
     const t = p.target;
     const pg = Math.min(projMonthly / t * 100, 100);
@@ -3897,6 +3997,8 @@ async function loadArb(){
     // Table
     const el=$('arb-list');
     if(!el) return;
+    renderArbTable(opps);
+    return;
     if(!opps.length){
       el.innerHTML='<div style="text-align:center;padding:30px;color:var(--txt3)">💤 Нет арбитражных возможностей</div>';
       return;
