@@ -1,0 +1,30 @@
+{
+  "name": "MaxAI Telegram Bot — Webhook to AI Reply",
+  "description": "Receive Telegram messages via webhook, process with MaxAI AI, send reply back to Telegram. No code needed. Works with any MaxAI-compatible backend.",
+  "categories": [
+    "AI",
+    "Communication",
+    "Automation"
+  ],
+  "tags": [
+    "telegram",
+    "bot",
+    "ai",
+    "maxai",
+    "webhook",
+    "automation"
+  ],
+  "version": "1.0.0",
+  "author": "MaxAI Corp",
+  "author_url": "https://t.me/maxai_corp",
+  "demo_url": "http://77.90.2.171:8090",
+  "nodes_used": [
+    "Webhook",
+    "HTTP Request",
+    "Telegram"
+  ],
+  "complexity": "beginner",
+  "use_case": "Automate Telegram bot responses with AI",
+  "steps": 3,
+  "estimated_setup_minutes": 10
+}

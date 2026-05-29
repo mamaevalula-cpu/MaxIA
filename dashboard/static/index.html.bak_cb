@@ -1,0 +1,1731 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MaxAI — Центр управления</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#060b16;--bg2:#0b1525;--bg3:#0f1e35;--bg4:#132440;
+  --brd:#162040;--brd2:#1e3060;--brd3:#2a4080;
+  --txt:#ccdaee;--txt2:#7a9abd;--txt3:#3a5575;
+  --acc:#3ab8e8;--acc2:#2090c0;
+  --grn:#00d880;--grn2:#00a860;
+  --red:#ff3050;--red2:#c02040;
+  --yel:#ffb800;--yel2:#c08800;
+  --pur:#9050e0;--pur2:#6030b0;
+  --ora:#ff7020;
+  --r:7px;--r2:5px;--r3:3px;
+  --sh:0 2px 12px rgba(0,0,0,.5);
+}
+body{background:var(--bg);color:var(--txt);font-family:'Segoe UI',system-ui,sans-serif;font-size:13px;min-height:100vh}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--brd2);border-radius:2px}
+::-webkit-scrollbar-thumb:hover{background:var(--brd3)}
+
+/* ═══ HEADER ═══ */
+#hdr{
+  height:52px;background:linear-gradient(90deg,#030810 0%,#0c1830 50%,#030810 100%);
+  border-bottom:1px solid var(--brd2);display:flex;align-items:center;
+  padding:0 24px;gap:14px;position:sticky;top:0;z-index:200;
+  box-shadow:0 1px 20px rgba(0,0,0,.6)
+}
+#logo{display:flex;align-items:center;gap:10px;margin-right:4px}
+#logo-icon{width:30px;height:30px;background:linear-gradient(135deg,#1a60c0,#3ab8e8);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:0 0 12px #3ab8e840}
+#logo-text{font-size:15px;font-weight:700;color:#e8f4ff;letter-spacing:1.5px}
+#logo-ver{font-size:9px;color:var(--txt3);letter-spacing:.5px;margin-top:1px}
+#hdr-chips{display:flex;gap:6px;flex:1}
+.hchip{display:flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap}
+.hchip-g{background:#00d88015;border:1px solid #00d88040;color:var(--grn)}
+.hchip-r{background:#ff305015;border:1px solid #ff305040;color:var(--red)}
+.hchip-y{background:#ffb80015;border:1px solid #ffb80040;color:var(--yel)}
+.hchip-b{background:#3ab8e815;border:1px solid #3ab8e840;color:var(--acc)}
+.pulse{width:6px;height:6px;border-radius:50%;background:currentColor;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+#hdr-time{color:var(--txt3);font-size:11px;font-family:'Consolas',monospace;margin-left:8px}
+#hdr-refresh{background:none;border:1px solid var(--brd2);color:var(--txt3);padding:4px 8px;border-radius:var(--r2);cursor:pointer;font-size:11px;transition:all .15s}
+#hdr-refresh:hover{border-color:var(--acc);color:var(--acc)}
+
+/* ═══ TABS ═══ */
+#tabs{
+  background:#040a14;border-bottom:1px solid var(--brd);
+  display:flex;overflow-x:auto;padding:0 8px;
+  position:sticky;top:52px;z-index:199;gap:2px;
+}
+#tabs::-webkit-scrollbar{height:2px}
+.tb{
+  display:flex;align-items:center;gap:6px;
+  padding:10px 16px;cursor:pointer;color:var(--txt3);
+  font-size:12px;font-weight:500;border-bottom:2px solid transparent;
+  white-space:nowrap;transition:all .15s;user-select:none;border-radius:var(--r2) var(--r2) 0 0
+}
+.tb:hover{color:var(--txt);background:#080f1e}
+.tb.on{color:var(--acc);border-bottom-color:var(--acc);background:#081525}
+.tb-ico{font-size:14px;line-height:1}
+
+/* ═══ CONTENT ═══ */
+.sc{display:none;padding:20px;animation:fadeIn .2s ease}
+.sc.on{display:block}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+/* ═══ GRIDS ═══ */
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:14px}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+.g5{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px}
+@media(max-width:1100px){.g5{grid-template-columns:repeat(3,1fr)}.g4{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:700px){.g2,.g3,.g4,.g5{grid-template-columns:1fr}}
+
+/* ═══ CARD ═══ */
+.card{
+  background:var(--bg2);border:1px solid var(--brd);border-radius:var(--r);
+  padding:16px;box-shadow:var(--sh);transition:border-color .2s
+}
+.card:hover{border-color:var(--brd2)}
+.card-title{
+  color:var(--txt3);font-size:10px;text-transform:uppercase;
+  letter-spacing:1.5px;margin-bottom:12px;font-weight:700;
+  display:flex;align-items:center;gap:6px
+}
+.card-title-ico{font-size:12px;opacity:.7}
+
+/* ═══ STAT CARD ═══ */
+.stat{background:var(--bg2);border:1px solid var(--brd);border-radius:var(--r);padding:16px 18px;box-shadow:var(--sh)}
+.stat:hover{border-color:var(--brd2)}
+.stat-val{font-size:26px;font-weight:800;color:#ddeeff;line-height:1;margin-bottom:4px;letter-spacing:-.5px}
+.stat-lbl{font-size:11px;color:var(--txt2);margin-bottom:2px}
+.stat-sub{font-size:10px;color:var(--txt3)}
+.stat-grn .stat-val{color:var(--grn)}
+.stat-red .stat-val{color:var(--red)}
+.stat-yel .stat-val{color:var(--yel)}
+.stat-acc .stat-val{color:var(--acc)}
+
+/* ═══ PROGRESS ═══ */
+.pb{height:4px;background:var(--brd);border-radius:2px;margin-top:8px;overflow:hidden}
+.pb-f{height:100%;border-radius:2px;transition:width .8s ease}
+.pb-acc{background:linear-gradient(90deg,var(--acc2),var(--acc))}
+.pb-grn{background:linear-gradient(90deg,var(--grn2),var(--grn))}
+.pb-red{background:linear-gradient(90deg,var(--red2),var(--red))}
+.pb-yel{background:linear-gradient(90deg,var(--yel2),var(--yel))}
+.pb-pur{background:linear-gradient(90deg,var(--pur2),var(--pur))}
+
+/* ═══ BADGES ═══ */
+.badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700;letter-spacing:.3px}
+.b-g{background:#00d88018;border:1px solid #00d88050;color:var(--grn)}
+.b-r{background:#ff305018;border:1px solid #ff305050;color:var(--red)}
+.b-y{background:#ffb80018;border:1px solid #ffb80050;color:var(--yel)}
+.b-b{background:#3ab8e818;border:1px solid #3ab8e850;color:var(--acc)}
+.b-p{background:#9050e018;border:1px solid #9050e050;color:var(--pur)}
+.b-o{background:#ff702018;border:1px solid #ff702050;color:var(--ora)}
+
+/* ═══ STATUS DOT ═══ */
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.dot-g{background:var(--grn);box-shadow:0 0 6px var(--grn)}
+.dot-r{background:var(--red);box-shadow:0 0 6px var(--red)}
+.dot-y{background:var(--yel);box-shadow:0 0 6px var(--yel)}
+.dot-b{background:var(--acc);box-shadow:0 0 6px var(--acc)}
+
+/* ═══ TABLE ═══ */
+.tbl-wrap{overflow-x:auto;border-radius:var(--r2);border:1px solid var(--brd)}
+table{width:100%;border-collapse:collapse}
+thead{background:#0a1525}
+th{color:var(--txt3);font-size:10px;text-transform:uppercase;letter-spacing:1px;padding:8px 12px;text-align:left;border-bottom:1px solid var(--brd);white-space:nowrap;font-weight:700}
+td{padding:8px 12px;border-bottom:1px solid #080e18;font-size:12px;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#0a1525}
+tbody tr{transition:background .1s}
+
+/* ═══ ROW ═══ */
+.row{display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid #0a1020}
+.row:last-child{border:none}
+.row-left{display:flex;align-items:center;gap:8px;color:var(--txt2)}
+.row-right{font-weight:600;color:var(--txt)}
+
+/* ═══ BUTTONS ═══ */
+.btn{
+  display:inline-flex;align-items:center;gap:6px;
+  background:var(--bg3);border:1px solid var(--brd2);color:var(--acc);
+  padding:7px 16px;border-radius:var(--r2);cursor:pointer;font-size:12px;
+  font-weight:600;transition:all .15s;white-space:nowrap;letter-spacing:.3px
+}
+.btn:hover{background:var(--bg4);border-color:var(--acc);box-shadow:0 0 10px #3ab8e820}
+.btn:active{transform:scale(.97)}
+.btn:disabled{opacity:.4;cursor:not-allowed;pointer-events:none}
+.btn-g{background:#00d88010;border-color:#00d88050;color:var(--grn)}
+.btn-g:hover{background:#00d88020;border-color:var(--grn);box-shadow:0 0 10px #00d88020}
+.btn-r{background:#ff305010;border-color:#ff305050;color:var(--red)}
+.btn-r:hover{background:#ff305020;border-color:var(--red);box-shadow:0 0 10px #ff305020}
+.btn-y{background:#ffb80010;border-color:#ffb80050;color:var(--yel)}
+.btn-y:hover{background:#ffb80020;border-color:var(--yel)}
+.btn-sm{padding:4px 10px;font-size:11px}
+
+/* ═══ INPUT / TEXTAREA ═══ */
+.inp{background:#030810;border:1px solid var(--brd2);color:var(--txt);padding:8px 12px;border-radius:var(--r2);font-size:12px;width:100%;outline:none;transition:border-color .15s}
+.inp:focus{border-color:var(--acc);box-shadow:0 0 0 2px #3ab8e815}
+.inp::placeholder{color:var(--txt3)}
+textarea.inp{resize:vertical;font-family:'Consolas',monospace;line-height:1.6}
+select.inp{cursor:pointer}
+
+/* ═══ LOG BOX ═══ */
+.logbox{
+  background:#020709;border:1px solid var(--brd);border-radius:var(--r2);
+  padding:12px;font-family:'Consolas',monospace;font-size:11px;color:#1a9090;
+  line-height:1.8;overflow-y:auto;white-space:pre-wrap;word-break:break-word
+}
+
+/* ═══ SECTION TITLE ═══ */
+.sec-title{
+  font-size:11px;color:var(--txt3);text-transform:uppercase;letter-spacing:2px;
+  font-weight:700;margin:18px 0 10px;padding-bottom:6px;
+  border-bottom:1px solid var(--brd);display:flex;align-items:center;gap:8px
+}
+.sec-title span{flex:1}
+
+/* ═══ ALERT BOX ═══ */
+.alert{padding:10px 14px;border-radius:var(--r2);font-size:12px;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.alert-r{background:#ff305010;border:1px solid #ff305040;color:var(--red)}
+.alert-g{background:#00d88010;border:1px solid #00d88040;color:var(--grn)}
+.alert-y{background:#ffb80010;border:1px solid #ffb80040;color:var(--yel)}
+.alert-b{background:#3ab8e810;border:1px solid #3ab8e840;color:var(--acc)}
+
+/* ═══ CHAT ═══ */
+#chat-box{height:380px;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px;background:#020709;border:1px solid var(--brd);border-radius:var(--r2) var(--r2) 0 0}
+.msg-user{align-self:flex-end;background:linear-gradient(135deg,#1a3560,#1a4080);border:1px solid var(--brd2);padding:10px 14px;border-radius:14px 14px 3px 14px;max-width:72%;font-size:12px;color:#ddeeff}
+.msg-ai{align-self:flex-start;background:var(--bg2);border:1px solid var(--brd);padding:10px 14px;border-radius:14px 14px 14px 3px;max-width:82%;font-size:12px}
+.msg-ai pre{white-space:pre-wrap;word-break:break-word;margin:0;color:var(--txt);line-height:1.6}
+.msg-time{font-size:10px;color:var(--txt3);margin-top:3px;text-align:right}
+#chat-send-row{display:flex;gap:8px;background:#040c18;border:1px solid var(--brd);border-top:none;padding:10px;border-radius:0 0 var(--r2) var(--r2)}
+
+/* ═══ PLATFORM CARD ═══ */
+.plat-card{background:var(--bg2);border:1px solid var(--brd);border-radius:var(--r);padding:14px;transition:all .2s}
+.plat-card:hover{border-color:var(--brd3);transform:translateY(-1px);box-shadow:0 4px 20px rgba(0,0,0,.4)}
+.plat-name{font-size:12px;font-weight:700;color:#ddeeff;margin-bottom:4px}
+.plat-cat{font-size:10px;color:var(--txt3);margin-bottom:8px}
+
+/* ═══ SKILL CARD ═══ */
+.skill-item{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #090f1c}
+.skill-item:last-child{border:none}
+.skill-rank{font-size:11px;color:var(--txt3);width:20px;text-align:center}
+.skill-name{flex:1;font-size:11px;color:var(--txt2)}
+.skill-ev{font-weight:700;font-size:13px}
+
+/* ═══ LOADER ═══ */
+.loader{display:inline-block;width:16px;height:16px;border:2px solid var(--brd2);border-top-color:var(--acc);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-wrap{display:flex;align-items:center;justify-content:center;padding:40px;gap:10px;color:var(--txt3)}
+
+/* ═══ INCIDENT BUTTONS ═══ */
+.incident-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+@media(max-width:800px){.incident-grid{grid-template-columns:repeat(2,1fr)}}
+.inc-btn{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+  padding:14px;border-radius:var(--r);cursor:pointer;font-size:11px;font-weight:700;
+  border:1px solid;transition:all .2s;text-align:center;letter-spacing:.3px
+}
+.inc-btn .inc-ico{font-size:22px}
+.inc-btn:hover{transform:translateY(-2px);box-shadow:0 6px 20px rgba(0,0,0,.4)}
+.inc-btn:active{transform:scale(.96)}
+.inc-kill{background:#ff305010;border-color:#ff305040;color:var(--red)}
+.inc-kill:hover{background:#ff305025;border-color:var(--red)}
+.inc-block{background:#ffb80010;border-color:#ffb80040;color:var(--yel)}
+.inc-block:hover{background:#ffb80025;border-color:var(--yel)}
+.inc-roll{background:#3ab8e810;border-color:#3ab8e840;color:var(--acc)}
+.inc-roll:hover{background:#3ab8e825;border-color:var(--acc)}
+.inc-back{background:#9050e010;border-color:#9050e040;color:var(--pur)}
+.inc-back:hover{background:#9050e025;border-color:var(--pur)}
+
+/* ═══ FEEDBACK ═══ */
+.fb{font-size:11px;padding:4px 10px;border-radius:var(--r2);margin-left:8px;opacity:0;transition:opacity .3s}
+.fb.show{opacity:1}
+.fb-ok{background:#00d88015;color:var(--grn);border:1px solid #00d88040}
+.fb-err{background:#ff305015;color:var(--red);border:1px solid #ff305040}
+
+/* ═══ PHASE BARS ═══ */
+.phase-item{margin-bottom:14px}
+.phase-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px}
+.phase-name{font-size:12px;color:var(--txt2);font-weight:600}
+.phase-target{font-size:11px;color:var(--acc);font-weight:700}
+.phase-pct{font-size:10px;color:var(--txt3);margin-top:3px}
+
+/* ═══ GRADE BADGE ═══ */
+.grade-a{font-size:15px;font-weight:800;color:var(--grn)}
+.grade-b{font-size:15px;font-weight:800;color:var(--acc)}
+.grade-c{font-size:15px;font-weight:800;color:var(--yel)}
+.grade-d,.grade-f{font-size:15px;font-weight:800;color:var(--red)}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════ HEADER ═══════════════════ -->
+<div id="hdr">
+  <div id="logo">
+    <div id="logo-icon">⚡</div>
+    <div>
+      <div id="logo-text">MaxAI</div>
+      <div id="logo-ver">Корпорация MaxAI</div>
+    </div>
+  </div>
+  <div id="hdr-chips">
+    <div class="hchip hchip-y" id="chip-svc"><span class="pulse"></span><span>ЗАГРУЗКА</span></div>
+    <div class="hchip hchip-b" id="chip-agents">— агентов</div>
+    <div class="hchip hchip-g" id="chip-tasks">— задач</div>
+    <div class="hchip hchip-b" id="chip-cost">$0.0000</div>
+    <div class="hchip hchip-g" id="chip-balance">$—</div>
+    <div class="hchip hchip-b" id="chip-pnl">PnL $0</div>
+  </div>
+  <span id="hdr-time">--:--:--</span>
+  <button id="hdr-refresh" onclick="refreshAll()">↻ Обновить</button>
+</div>
+
+<!-- ═══════════════════ TABS ═══════════════════ -->
+<div id="tabs">
+  <div class="tb on"  onclick="go('dash')"><span class="tb-ico">🏠</span>Главная</div>
+  <div class="tb" onclick="go('revenue')"><span class="tb-ico">💰</span>Доходы</div>
+  <div class="tb" onclick="go('agents')"><span class="tb-ico">🤖</span>Агенты</div>
+  <div class="tb" onclick="go('tasks')"><span class="tb-ico">📋</span>Задачи</div>
+  <div class="tb" onclick="go('quality')"><span class="tb-ico">⭐</span>Качество</div>
+  <div class="tb" onclick="go('failures')"><span class="tb-ico">🔥</span>Инциденты</div>
+  <div class="tb" onclick="go('evolution')"><span class="tb-ico">🧬</span>Эволюция</div>
+  <div class="tb" onclick="go('platforms')"><span class="tb-ico">🌐</span>Платформы</div>
+  <div class="tb" onclick="go('skills')"><span class="tb-ico">🧠</span>Навыки</div>
+  <div class="tb" onclick="go('scout')"><span class="tb-ico">🔭</span>Скаут</div>
+  <div class="tb" onclick="go('llm')"><span class="tb-ico">💡</span>Модели ИИ</div>
+  <div class="tb" onclick="go('chat')"><span class="tb-ico">💬</span>Чат</div>
+  <div class="tb" onclick="go('logs')"><span class="tb-ico">📜</span>Логи</div>
+  <div class="tb" onclick="go('browser')"><span class="tb-ico">🖥</span>Браузер</div>
+</div>
+
+<!-- ═══════════════════ ГЛАВНАЯ ═══════════════════ -->
+<div id="sc-dash" class="sc on">
+  <div class="g5" id="dash-kpis">
+    <div class="stat"><div class="loader" style="margin:8px auto 6px"></div><div class="stat-lbl">Загрузка...</div></div>
+  </div>
+  <!-- ── Service health strip ───────────────────────────────────────── -->
+  <div id="dash-services" style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:14px">
+    <div style="background:var(--bg2);border:1px solid var(--brd);border-radius:6px;padding:8px;text-align:center;color:var(--txt3);font-size:11px">
+      <div class="loader" style="margin:0 auto 4px"></div>Загрузка сервисов…
+    </div>
+  </div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🟢</span>Состояние подсистем</div>
+      <div id="dash-health"><div class="loading-wrap"><div class="loader"></div></div></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">📊</span>Параметры системы</div>
+      <div id="dash-params"></div>
+    </div>
+  </div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">⚡</span>KPI Корпорации MaxAI</div>
+      <div id="dash-hkpi"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🚨</span>Сигналы и тревоги</div>
+      <div id="dash-alerts"></div>
+    </div>
+  </div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">📈</span>Bybit — Открытые позиции</div>
+      <div id="dash-positions"><div class="loading-wrap"><div class="loader"></div></div></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🔮</span>Торговые сигналы (15m)</div>
+      <div id="dash-signals"><div class="loading-wrap"><div class="loader"></div></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ ДОХОДЫ ═══════════════════ -->
+<div id="sc-revenue" class="sc">
+  <div class="g4" id="rev-kpis"></div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">💸</span>Потоки доходов</div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Поток</th><th>Агент</th><th>Доход $</th><th>Статус</th></tr></thead>
+          <tbody id="rev-tbl"><tr><td colspan="4" style="text-align:center;padding:20px"><div class="loader" style="margin:0 auto"></div></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🌍</span>Фазы глобального роста</div>
+      <div id="rev-phases"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ АГЕНТЫ ═══════════════════ -->
+<div id="sc-agents" class="sc">
+  <div class="g4" id="ag-kpis"></div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🏅</span>По уровню</div>
+      <div id="ag-rank"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🏢</span>По отделу</div>
+      <div id="ag-dept"></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title"><span class="card-title-ico">🤖</span>Весь флот агентов</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Агент</th><th>Отдел</th><th>Уровень</th><th>Качество</th><th>Статус</th><th>Описание</th></tr></thead>
+        <tbody id="ag-tbl"><tr><td colspan="6" style="text-align:center;padding:20px"><div class="loader" style="margin:0 auto"></div></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ ЗАДАЧИ ═══════════════════ -->
+<div id="sc-tasks" class="sc">
+  <div class="g4" id="task-kpis"></div>
+  <div class="card" style="margin-bottom:14px">
+    <div class="card-title"><span class="card-title-ico">📋</span>Список задач</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>ID</th><th>Агент</th><th>Описание</th><th>Статус</th><th>Источник</th><th>Обновлено</th></tr></thead>
+        <tbody id="task-tbl"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="sec-title"><span class="card-title-ico">▶</span><span>Запуск задачи через 5-слойный Pipeline</span></div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">⚙️</span>Параметры задачи</div>
+      <label style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px">Цель задачи</label>
+      <input class="inp" id="pipe-goal" placeholder="Анализ доходов..." style="margin-bottom:8px">
+      <label style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px">Теги (через запятую)</label>
+      <input class="inp" id="pipe-tags" placeholder="finance, revenue" style="margin-bottom:8px" value="general">
+      <label style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px">Промпт</label>
+      <textarea class="inp" id="pipe-prompt" rows="3" placeholder="Опишите задачу подробнее...">Проанализируй текущие потоки доходов</textarea>
+      <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-g" onclick="runPipeline()" id="pipe-btn">▶ Запустить</button>
+        <div class="fb" id="pipe-fb"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">📄</span>Результат</div>
+      <div class="logbox" id="pipe-res" style="height:160px">Результат появится здесь...</div>
+      <div style="margin-top:8px;font-size:11px;color:var(--txt3)" id="pipe-info"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ КАЧЕСТВО ═══════════════════ -->
+<div id="sc-quality" class="sc">
+  <div class="g4" id="ql-kpis"></div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">📊</span>Распределение оценок</div>
+      <div id="ql-grades"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">📝</span>Очередь улучшений</div>
+      <div id="ql-backlog"></div>
+    </div>
+  </div>
+  <div class="sec-title"><span>⏱ SLO — Соглашение об уровне сервиса</span></div>
+  <div class="g4" id="slo-kpis"></div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">⏱</span>Задержки (Latency)</div>
+      <div id="slo-lat"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🔄</span>Стадии Pipeline</div>
+      <div id="slo-pipe"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ ИНЦИДЕНТЫ ═══════════════════ -->
+<div id="sc-failures" class="sc">
+  <div class="g3" id="fail-kpis"></div>
+
+  <div class="sec-title"><span>🎛 Управление инцидентами</span></div>
+  <div class="incident-grid">
+    <div class="inc-btn inc-kill" onclick="doIncident('kill_switch')">
+      <div class="inc-ico">☠️</div>
+      <div>KILL SWITCH</div>
+      <div style="font-size:9px;opacity:.7;font-weight:400">Аварийная остановка</div>
+    </div>
+    <div class="inc-btn inc-block" onclick="doIncident('block_retries')">
+      <div class="inc-ico">🚫</div>
+      <div>ЗАБЛОК. РЕТРАИ</div>
+      <div style="font-size:9px;opacity:.7;font-weight:400">Остановить повторы</div>
+    </div>
+    <div class="inc-btn inc-roll" onclick="doIncident('rollback')">
+      <div class="inc-ico">⏪</div>
+      <div>ОТКАТ</div>
+      <div style="font-size:9px;opacity:.7;font-weight:400">Rollback к стабильной</div>
+    </div>
+    <div class="inc-btn inc-back" onclick="doIncident('switch_backup')">
+      <div class="inc-ico">🔄</div>
+      <div>РЕЗЕРВ</div>
+      <div style="font-size:9px;opacity:.7;font-weight:400">Переключить на backup</div>
+    </div>
+  </div>
+  <div id="incident-feedback" style="margin-bottom:12px"></div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="card-title"><span class="card-title-ico">🔥</span>Кластеры ошибок</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Hash</th><th>Причина</th><th>Кол-во</th><th>Серьёзность</th><th>Последний раз</th><th>Состояние</th></tr></thead>
+        <tbody id="fail-tbl"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="card-title-ico">📒</span>Журнал действий (Ledger)</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Время</th><th>Инициатор</th><th>Действие</th><th>Цель</th><th>Причина</th></tr></thead>
+        <tbody id="lgr-tbl"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ ЭВОЛЮЦИЯ ═══════════════════ -->
+<div id="sc-evolution" class="sc">
+  <div class="g4" id="ev-kpis"></div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">📋</span>Список желаний (Wishlist)</div>
+      <div id="ev-wish"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">✅</span>Созданные агенты</div>
+      <div id="ev-made"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ ПЛАТФОРМЫ ═══════════════════ -->
+<div id="sc-platforms" class="sc">
+  <div class="g4" id="pl-kpis"></div>
+  <div class="sec-title"><span>🌐 Кластеры платформ (30 адаптеров)</span></div>
+  <div class="g4" id="pl-clusters" style="margin-bottom:14px"></div>
+  <div class="card">
+    <div class="card-title"><span class="card-title-ico">🔌</span>Все адаптеры</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Платформа</th><th>Кластер</th><th>Режим</th><th>EV Оценка</th><th>API Ключ</th></tr></thead>
+        <tbody id="pl-tbl"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Registration Status -->
+  <div class="card" style="margin-top:14px">
+    <div class="card-title"><span class="card-title-ico">📋</span>Статус регистрации (20 платформ)</div>
+    <div class="g4" id="pl-reg-kpis" style="margin-bottom:10px"></div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Платформа</th><th>Статус</th><th>Заметка</th></tr></thead>
+        <tbody id="pl-reg-tbl"></tbody>
+      </table>
+    </div>
+  </div>
+  <!-- API Endpoints -->
+  <div class="card" style="margin-top:14px">
+    <div class="card-title"><span class="card-title-ico">🔗</span>MaxAI Integration API</div>
+    <div id="pl-api-list" style="padding:10px 0"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════ НАВЫКИ ═══════════════════ -->
+<div id="sc-skills" class="sc">
+  <div class="g4" id="sk-kpis"></div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🏆</span>Топ навыков по EV</div>
+      <div id="sk-top"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🏢</span>Дивизионы (Кластер C)</div>
+      <div id="sk-divs"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ СКАУТ ═══════════════════ -->
+<div id="sc-scout" class="sc">
+  <div class="g4" id="sct-kpis"></div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🗂</span>Домены исследований</div>
+      <div id="sct-domains"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">💡</span>Последние находки</div>
+      <div id="sct-finds"></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title"><span class="card-title-ico">📜</span>Лог Скаута</div>
+    <div class="logbox" id="sct-log" style="height:180px">Скаут ещё не запускался...</div>
+    <div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-g" onclick="runScout()" id="scout-btn">🔭 Запустить Скаут сейчас</button>
+      <div class="fb" id="scout-fb"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ МОДЕЛИ ИИ ═══════════════════ -->
+<div id="sc-llm" class="sc">
+  <div class="g4" id="llm-kpis"></div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🤖</span>Провайдеры ИИ</div>
+      <div id="llm-prov"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">⚙️</span>Параметры системы</div>
+      <div id="llm-sys"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ ЧАТ ═══════════════════ -->
+<div id="sc-chat" class="sc">
+  <div style="max-width:800px;margin:0 auto">
+    <div class="card" style="padding:0;overflow:hidden">
+      <div style="background:#040c18;padding:12px 16px;border-bottom:1px solid var(--brd);display:flex;align-items:center;gap:8px">
+        <span style="font-size:16px">🤖</span>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:#ddeeff">MaxAI Ассистент</div>
+          <div style="font-size:10px;color:var(--txt3)">Управляйте системой с помощью чата</div>
+        </div>
+        <div class="dot dot-g" style="margin-left:auto"></div>
+      </div>
+      <div id="chat-box"></div>
+      <div id="chat-send-row">
+        <input class="inp" id="chat-inp" placeholder="Введите сообщение... (Enter для отправки)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat()}">
+        <button class="btn btn-g" onclick="sendChat()" id="chat-btn">Отправить</button>
+      </div>
+    </div>
+    <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-sm" onclick="quickChat('Покажи статус всех сервисов')">Статус сервисов</button>
+      <button class="btn btn-sm" onclick="quickChat('Сколько агентов активно?')">Агенты</button>
+      <button class="btn btn-sm" onclick="quickChat('Какой текущий доход?')">Доходы</button>
+      <button class="btn btn-sm" onclick="quickChat('Есть ли ошибки?')">Ошибки</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ ЛОГИ ═══════════════════ -->
+<div id="sc-logs" class="sc">
+  <div class="card" style="margin-bottom:14px">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select class="inp" id="log-file" oninput="debouncedLoadLogs()" style="width:auto;min-width:180px">
+        <option value="system">system</option>
+        <option value="orchestrator">orchestrator</option>
+        <option value="maxai_ceo">maxai_ceo</option>
+        <option value="quality_guardian">quality_guardian</option>
+        <option value="the_scout">the_scout</option>
+        <option value="bybit_earn">bybit_earn</option>
+        <option value="b2b_leads">b2b_leads</option>
+        <option value="auto_loop">auto_loop</option>
+        <option value="errors">errors</option>
+      </select>
+      <input class="inp" id="log-lines" type="number" value="100" min="20" max="500" style="width:80px" oninput="debouncedLoadLogs()">
+      <span style="font-size:11px;color:var(--txt3)">строк</span>
+      <button class="btn" onclick="loadLogs()">↻ Обновить</button>
+      <button class="btn btn-sm" onclick="toggleAutolog()" id="autolog-btn">▶ Авто</button>
+      <div class="fb show" id="log-name-fb" style="background:none;border:none;color:var(--txt3)"></div>
+    </div>
+  </div>
+  <div class="logbox" id="log-out" style="height:calc(100vh - 280px);min-height:300px">Выберите файл лога...</div>
+</div>
+
+<!-- ═══════════════════ БРАУЗЕР ═══════════════════ -->
+<div id="sc-browser" class="sc">
+  <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start">
+
+    <!-- Left: Screenshot -->
+    <div style="flex:1.4;min-width:360px">
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+          <span style="font-weight:700;font-size:1.05rem">🖥 Браузер</span>
+          <span id="br-state-chip" class="badge b-b">UNKNOWN</span>
+          <span id="br-owner-chip" class="badge" style="background:#0b1525;color:var(--txt3)">no owner</span>
+          <div style="margin-left:auto;display:flex;gap:6px">
+            <button class="btn btn-g" onclick="browserStart()" style="font-size:.78rem;padding:4px 10px">▶ Start</button>
+            <button class="btn btn-r" onclick="browserStop()" style="font-size:.78rem;padding:4px 10px">■ Stop</button>
+          </div>
+        </div>
+        <!-- Quick-access URLs -->
+        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">
+          <span style="font-size:10px;color:var(--txt3);align-self:center;margin-right:2px">Быстро:</span>
+          <button class="btn" style="font-size:.7rem;padding:2px 8px;background:var(--bg3)" onclick="openInBrowser('https://app.bybit.com')">Bybit Live</button>
+          <button class="btn" style="font-size:.7rem;padding:2px 8px;background:var(--bg3)" onclick="openInBrowser('https://testnet.bybit.com')">Bybit Testnet</button>
+          <button class="btn" style="font-size:.7rem;padding:2px 8px;background:var(--bg3)" onclick="openInBrowser('https://t.me')">Telegram</button>
+          <button class="btn" style="font-size:.7rem;padding:2px 8px;background:var(--bg3)" onclick="openInBrowser('http://77.90.2.171/api/status')">API Status</button>
+          <button class="btn" style="font-size:.7rem;padding:2px 8px;background:var(--bg3)" onclick="openInBrowser('https://console.cloud.google.com')">Google Cloud</button>
+          <button class="btn" style="font-size:.7rem;padding:2px 8px;background:var(--bg3)" onclick="openInBrowser('https://github.com')">GitHub</button>
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:10px">
+          <input id="br-url-input" type="text" placeholder="https://..." class="inp" style="flex:1;font-size:.82rem"
+            onkeydown="if(event.key==='Enter'){event.preventDefault();browserNavigate()}" />
+          <button class="btn btn-b" onclick="browserNavigate()" style="font-size:.8rem;padding:5px 14px">Go</button>
+        </div>
+        <div style="background:#040a14;border-radius:6px;overflow:hidden;min-height:260px;border:1px solid var(--brd);position:relative">
+          <img id="br-screenshot" src="" alt="" style="width:100%;display:block" onerror="this.style.opacity=0" />
+          <div id="br-no-screen" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--txt3);font-size:.85rem">нет скриншота</div>
+        </div>
+        <div style="margin-top:6px;display:flex;justify-content:space-between;align-items:center">
+          <span id="br-current-url" style="font-size:.72rem;color:var(--txt3);word-break:break-all;max-width:82%">—</span>
+          <button class="btn" onclick="loadBrowser()" style="font-size:.72rem;padding:2px 8px">↻</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: Controls -->
+    <div style="flex:1;min-width:300px;display:flex;flex-direction:column;gap:10px">
+
+      <!-- Lease -->
+      <div class="card">
+        <div class="card-title"><span class="card-title-ico">🔑</span>Управление</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn" onclick="browserAcquireLease()" style="font-size:.78rem;background:#0f766e;color:#fff">Acquire Lease</button>
+          <button class="btn" onclick="browserReleaseLease()" style="font-size:.78rem">Release</button>
+          <button class="btn" onclick="browserTakeoverRequest()" style="font-size:.78rem;background:var(--yel2);color:#000">Human Takeover</button>
+          <button class="btn" onclick="browserTakeoverRelease()" style="font-size:.78rem">↩ Release</button>
+          <button class="btn" onclick="browserReconcile()" style="font-size:.78rem">⚖ Reconcile</button>
+          <button class="btn" onclick="browserRecover()" style="font-size:.78rem;background:var(--pur2);color:#fff">🔄 Recover</button>
+        </div>
+        <div style="margin-top:8px;font-size:.75rem;color:var(--txt3)">
+          Token: <code id="br-token-display" style="color:var(--yel);font-size:.7rem;word-break:break-all">—</code>
+        </div>
+      </div>
+
+      <!-- Action -->
+      <div class="card">
+        <div class="card-title"><span class="card-title-ico">⚡</span>Действие</div>
+        <div style="display:flex;gap:6px;margin-bottom:6px">
+          <select id="br-action-select" class="inp" style="flex:1;font-size:.8rem">
+            <option value="inspect">inspect</option>
+            <option value="get_text">get_text</option>
+            <option value="screenshot">screenshot</option>
+            <option value="validate">validate</option>
+            <option value="scroll">scroll</option>
+            <option value="navigate">navigate</option>
+            <option value="click">click</option>
+            <option value="type">type</option>
+          </select>
+          <button class="btn btn-b" onclick="browserExecuteAction()" style="font-size:.78rem;padding:5px 12px">Run</button>
+        </div>
+        <textarea id="br-action-params" rows="2" placeholder='{"selector":"","value":""}' class="inp" style="width:100%;font-size:.75rem;resize:vertical;min-height:42px"></textarea>
+      </div>
+
+      <!-- Checkpoints -->
+      <div class="card">
+        <div class="card-title"><span class="card-title-ico">💾</span>Чекпоинты</div>
+        <div id="br-checkpoints-list" style="font-size:.75rem;color:var(--txt3);max-height:80px;overflow-y:auto">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Log -->
+  <div class="card" style="margin-top:12px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <span class="card-title" style="margin:0">📋 Лог действий</span>
+      <button class="btn" onclick="$('br-log').innerHTML=''" style="font-size:.72rem;padding:2px 8px">Очистить</button>
+    </div>
+    <div id="br-log" class="logbox" style="height:160px;min-height:80px;font-size:.75rem"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════ JAVASCRIPT ═══════════════════ -->
+<script>
+'use strict';
+const HYP = '/api/hyperion';
+const $ = id => document.getElementById(id);
+const esc = s => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const fmtN = v => v==null?'—':typeof v==='number'?v.toLocaleString('ru-RU'):esc(String(v));
+const fmtT = iso => { try{const d=new Date(iso);return isNaN(d)?esc(String(iso)):d.toLocaleTimeString('ru-RU');}catch{return '—';} };
+const fmtDT = iso => { try{const d=new Date(iso);return isNaN(d)?esc(String(iso)):d.toLocaleString('ru-RU');}catch{return '—';} };
+const fmtMs = v => v>1000?(v/1000).toFixed(1)+'с':Math.round(v||0)+'мс';
+const clamp = (v,a,b) => Math.min(Math.max(v||0,a),b);
+
+let curTab='dash', loaded={}, autoT=null, autologT=null;
+
+// ─── API call ──────────────────────────────────────────────────────────────
+// 800ms debounce utility
+function debounce(fn, ms) {
+  let timer;
+  return function(...args) {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn.apply(this, args), ms);
+  };
+}
+const debouncedLoadLogs = debounce(loadLogs, 800);
+
+async function api(path, opts={}) {
+  try {
+    const r = await fetch(path, {signal:AbortSignal.timeout(14000),...opts});
+    if (!r.ok) throw new Error('HTTP '+r.status+' '+r.statusText);
+    return await r.json();
+  } catch(e) {
+    console.warn('API', path, e.message);
+    return null;
+  }
+}
+
+// ─── Feedback helper ───────────────────────────────────────────────────────
+function showFb(id, msg, ok=true) {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'fb show ' + (ok ? 'fb-ok' : 'fb-err');
+  setTimeout(() => { el.className = 'fb'; }, 4000);
+}
+
+// ─── Badge / Dot helpers ───────────────────────────────────────────────────
+function bdg(t, cls='b') { return `<span class="badge b-${cls}">${esc(String(t??''))}</span>`; }
+function dot(ok) { return `<span class="dot dot-${ok?'g':'r'}"></span>`; }
+function bar(pct, cls='acc') {
+  const w = clamp(pct,0,100);
+  return `<div class="pb"><div class="pb-f pb-${cls}" style="width:${w}%"></div></div>`;
+}
+function statCard(val, lbl, sub='', cls='') {
+  return `<div class="stat ${cls}"><div class="stat-val">${esc(String(val??'—'))}</div><div class="stat-lbl">${lbl}</div>${sub?`<div class="stat-sub">${sub}</div>`:''}</div>`;
+}
+
+// ─── Clock ─────────────────────────────────────────────────────────────────
+setInterval(() => $('hdr-time').textContent = new Date().toLocaleTimeString('ru-RU'), 1000);
+
+// ─── Header refresh ────────────────────────────────────────────────────────
+async function refreshHeader() {
+  const d = (window.__ST__ && window.__ST__.brain) ? window.__ST__ : await api('/api/status');
+  window.__ST__ = null;
+  if (!d) return;
+  const ok = d.service === 'ok';
+  const chip = $('chip-svc');
+  chip.innerHTML = `<span class="pulse"></span><span>${ok?'ОНЛАЙН':'СБОЙ'}</span>`;
+  chip.className = 'hchip ' + (ok ? 'hchip-g' : 'hchip-r');
+  $('chip-agents').textContent = (d.agents_count||0) + ' агентов';
+  const t = d.tasks||{};
+  $('chip-tasks').textContent = (t.running||0) + ' активных';
+  $('chip-cost').textContent = '$'+(+(d.daily_cost_usd||0)).toFixed(4);
+  const tr = d.trading||{};
+  if (tr.balance_usdt) {
+    const bal = $('chip-balance');
+    bal.textContent = '$'+fmtN(tr.balance_usdt||0);
+    bal.className = 'hchip hchip-g';
+  }
+  const pnl = tr.daily_pnl_usdt||0;
+  const pnlEl = $('chip-pnl');
+  pnlEl.textContent = 'PnL '+(pnl>=0?'+':'')+fmtN(pnl)+'$';
+  pnlEl.className = 'hchip '+(pnl>0?'hchip-g':pnl<0?'hchip-r':'hchip-b');
+}
+window.__ST2__ = window.__ST__;
+refreshHeader();
+setInterval(refreshHeader, 20000);
+
+// ─── Tab switching ─────────────────────────────────────────────────────────
+const TABS = ['dash','revenue','agents','tasks','quality','failures','evolution','platforms','skills','scout','llm','chat','logs','browser'];
+
+// Russian status label map
+const RU_STATUS = {
+  'ok':              'Онлайн',
+  'error':           'Ошибка',
+  'connecting':      'Синхронизация шлюзов...',
+  'CONNECTING':      'Синхронизация автономных шлюзов...',
+  'REVENUE_ACTIVE':  'Генерация прибыли активна',
+  'REVENUE_PAUSED':  'Генерация прибыли приостановлена',
+  'MAINTENANCE':     'Техническое обслуживание',
+  'active':          'Активен',
+  'inactive':        'Неактивен',
+  'failed':          'Ошибка запуска',
+  'running':         'Выполняется',
+  'pending':         'Ожидание',
+  'completed':       'Завершено',
+};
+function ruStatus(s) { return RU_STATUS[s] || s; }
+
+function go(tab) {
+  document.querySelectorAll('.tb').forEach((el,i) => el.classList.toggle('on', TABS[i]===tab));
+  TABS.forEach(t => { const s=$('sc-'+t); if(s) s.classList.toggle('on',t===tab); });
+  curTab = tab;
+  if (!loaded[tab]) { loaded[tab]=true; loadTab(tab); }
+  clearInterval(autoT);
+  autoT = setInterval(() => { loaded[tab]=false; loaded[tab]=true; loadTab(tab); }, 30000);
+}
+function loadTab(t) {
+  const m = {
+    dash:loadDash, revenue:loadRevenue, agents:loadAgents, tasks:loadTasks,
+    quality:loadQuality, failures:loadFailures, evolution:loadEvolution,
+    platforms:loadPlatforms, skills:loadSkills, scout:loadScout,
+    llm:loadLLM, chat:()=>{}, logs:loadLogs, browser:loadBrowser
+  };
+  if (m[t]) m[t]();
+}
+function refreshAll() {
+  loaded[curTab] = false;
+  loaded[curTab] = true;
+  loadTab(curTab);
+  refreshHeader();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ГЛАВНАЯ
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadDash() {
+  const _sSt = window.__ST2__;
+  const _sHm = window.__HM__;
+  window.__ST2__ = null; window.__HM__ = null;
+  const [st, hm] = _sSt && _sHm
+    ? [_sSt, _sHm]
+    : await Promise.all([api('/api/status'), api(HYP+'/api/v1/overview/metrics')]);
+
+  if (st) {
+    const t = st.tasks||{};
+    $('dash-kpis').innerHTML = [
+      statCard(st.agents_count||0, 'Агентов загружено', '', 'stat-acc'),
+      statCard(t.running||0, 'Активных задач', '', 'stat-grn'),
+      statCard(t.completed||0, 'Завершено', 'всего'),
+      statCard(t.failed||0, 'С ошибками', '', t.failed>0?'stat-red':''),
+      statCard('$'+(+(st.daily_cost_usd||0)).toFixed(4), 'Расходы сегодня', 'лимит $'+st.cost_limit_usd),
+    ].join('');
+    // Trading stats block
+    const tr = st.trading||{};
+    const trPnl = tr.daily_pnl_usdt||0;
+    $('dash-kpis').innerHTML += [
+      statCard('$'+fmtN(tr.balance_usdt||0), 'Баланс Bybit', tr.online?'онлайн':'офлайн', 'stat-grn'),
+      statCard((trPnl>=0?'+':'')+fmtN(trPnl)+'$', 'PnL сегодня', (tr.daily_pnl_pct||0).toFixed(2)+'%', trPnl>=0?'stat-grn':'stat-red'),
+    ].join('');
+
+    const statusMap = {ok:'g', error:'r', degraded:'y'};
+    $('dash-params').innerHTML = [
+      ['Сервис', bdg(st.service||'?', statusMap[st.service]||'b')],
+      ['Brain', bdg(st.brain||'?', statusMap[st.brain]||'b')],
+      ['Watchdog', bdg(st.watchdog||'?', statusMap[st.watchdog]||'b')],
+      ['Автономия', bdg(st.autonomy_enabled?'включена':'выкл', st.autonomy_enabled?'g':'y')],
+      ['Groq-only', bdg(st.groq_only_mode?'ВКЛ':'ВЫКЛ', st.groq_only_mode?'y':'g')],
+      ['Уровень защиты', bdg(st.guardrail_level||0, 'b')],
+    ].map(([l,v]) => `<div class="row"><span class="row-left">${esc(l)}</span>${v}</div>`).join('');
+    // Trading status
+    const tr2 = st.trading||{};
+    $('dash-params').innerHTML += [
+      ['Bybit торговля', bdg(tr2.online?'активна':'стоп', tr2.online?'g':'r')],
+    ].map(([l,v]) => `<div class="row"><span class="row-left">${esc(l)}</span>${v}</div>`).join('');
+  }
+
+  // Load trading positions and signals
+  try {
+    const [posData, sigData] = await Promise.all([
+      api('/api/trading/positions'),
+      api('/api/trading/signals'),
+    ]);
+    // Positions
+    const positions = (posData||{}).positions||[];
+    if (positions.length > 0) {
+      $('dash-positions').innerHTML = positions.map(p => {
+        const pnlPos = (p.pnl||0) >= 0;
+        const pnlStr = (p.pnl>=0?'+':'')+fmtN(p.pnl||0);
+        return `<div class="row" style="border-bottom:1px solid var(--brd2);padding-bottom:4px;margin-bottom:4px">
+          <span class="row-left"><b style="color:${p.side==='Buy'?'var(--grn)':'var(--red)'}">${p.side==='Buy'?'▲':'▼'} ${esc(p.symbol)}</b>
+          <span style="font-size:10px;color:var(--txt3);margin-left:6px">×${p.leverage||1}x qty=${p.size||0}</span></span>
+          <span style="color:${pnlPos?'var(--grn)':'var(--red)'};font-weight:700">${pnlStr}$</span>
+        </div>
+        <div class="row" style="font-size:11px;color:var(--txt3);margin-top:-4px;margin-bottom:6px">
+          <span>Вход: ${(p.entry_price||0).toFixed(3)}</span>
+          <span>Текущ: ${(p.mark_price||0).toFixed(3)}</span>
+          <span>SL: ${(p.stop_loss||0).toFixed(3)}</span>
+          <span>TP: ${(p.take_profit||0).toFixed(3)}</span>
+        </div>`;
+      }).join('');
+    } else {
+      $('dash-positions').innerHTML = '<div style="color:var(--txt3);padding:12px;font-size:12px;text-align:center">Нет открытых позиций</div>';
+    }
+    // Signals summary
+    const sigs = (sigData||{}).signals||[];
+    if (sigs.length > 0) {
+      $('dash-signals').innerHTML = sigs.map(sym_data => {
+        const sym = sym_data.symbol||'';
+        const actionable = (sym_data.strategies||[]).filter(s => s.action!=='HOLD' && s.strength>=0.5);
+        if (actionable.length === 0) {
+          const best = (sym_data.strategies||[]).reduce((a,b) => (b.strength||0)>(a.strength||0)?b:a, {strategy:'',strength:0,reason:'HOLD'});
+          return `<div class="row"><span class="row-left" style="font-size:11px"><b>${esc(sym)}</b></span><span style="color:var(--txt3);font-size:10px">HOLD</span></div>`;
+        }
+        return actionable.map(s => `<div class="row">
+          <span class="row-left"><b style="color:${s.action==='BUY'?'var(--grn)':'var(--red)'}">${s.action} ${esc(sym)}</b>
+          <span style="font-size:10px;color:var(--txt3);margin-left:4px">${esc(s.strategy)}</span></span>
+          ${bdg((s.strength*100).toFixed(0)+'%', s.strength>=0.8?'g':'y')}
+        </div>`).join('');
+      }).join('');
+    } else {
+      $('dash-signals').innerHTML = '<div style="color:var(--txt3);padding:12px;font-size:12px;text-align:center">Нет данных сигналов</div>';
+    }
+  } catch(e) {
+    $('dash-positions').innerHTML = '<div style="color:var(--txt3);padding:8px;font-size:11px">Ошибка загрузки позиций</div>';
+  }
+
+  if (hm) {
+    const kpi=hm.kpi||{}, h=hm.subsystems_health||{}, al=hm.alert_strip||{};
+    const hp = hm.health_percent||0;
+    $('dash-health').innerHTML = Object.entries(h).map(([k,v]) => {
+      const ok = v==='GREEN';
+      const labels = {db:'База данных',amqp:'Очередь сообщ.',pipeline:'Pipeline',evolution:'Эволюция',revenue:'Доходы',quality:'Качество'};
+      return `<div class="row">
+        <span class="row-left">${dot(ok)}<span>${labels[k]||esc(k.replace(/_/g,' '))}</span></span>
+        ${bdg(ok?'ОК':v, ok?'g':'r')}
+      </div>`;
+    }).join('') || '<div style="color:var(--txt3);padding:8px;font-size:12px">Нет данных о подсистемах</div>';
+
+    $('dash-hkpi').innerHTML = [
+      ['Пропускная способность', fmtN((kpi.throughput||{}).value||0)+' з/с'],
+      ['Чистая маржа', fmtN((kpi.net_margin||{}).value||0)+'%'],
+      ['Глубина очереди', fmtN((kpi.queue_depth||{}).value||0)],
+      ['ROI токенов', fmtN((kpi.token_roi||{}).value||0)+'%'],
+      ['Здоровье системы', hp+'%'],
+    ].map(([l,v]) => `<div class="row"><span class="row-left">${esc(l)}</span><span style="color:var(--acc);font-weight:700">${v}</span></div>`).join('');
+
+    const firing = al.current_firing_incidents||0;
+    $('dash-alerts').innerHTML = `
+      ${firing>0?`<div class="alert alert-r">🚨 ${firing} активных инцидентов!</div>`:'<div class="alert alert-g">✅ Инцидентов нет</div>'}
+      <div class="row"><span class="row-left">Подавлено алертов</span>${bdg(al.active_suppressed_alerts||0,'y')}</div>
+      <div class="row"><span class="row-left">Здоровье</span>${bdg(hp+'%', hp>=100?'g':hp>=70?'y':'r')}</div>
+      ${bar(hp, hp>=100?'grn':hp>=70?'yel':'red')}
+      <div style="font-size:10px;color:var(--txt3);margin-top:3px">${hp}% подсистем в норме</div>
+    `;
+  }
+  // Load real service health indicators
+  loadServices();
+}
+
+// ─── Service health strip ──────────────────────────────────────────────────
+async function loadServices() {
+  const data = await api('/api/services/health');
+  if (!data) return;
+  const el = $('dash-services');
+  if (!el) return;
+  const skip = ['_ts'];
+  const cards = Object.entries(data)
+    .filter(([k]) => !skip.includes(k))
+    .map(([k, v]) => {
+      const ok = v.ok === true;
+      const warn = !ok && v.status === 'not_compiled';
+      const col = ok ? 'var(--grn)' : warn ? 'var(--yel)' : 'var(--red)';
+      const bg  = ok ? '#00d88010' : warn ? '#ffb80010' : '#ff305010';
+      const brd = ok ? '#00d88030' : warn ? '#ffb80030' : '#ff305030';
+      let extra = '';
+      if (k === 'redis_db3' && v.vault_balance !== undefined) {
+        extra = `<div style="font-size:9px;color:var(--txt3);margin-top:2px">vault: ${esc(v.vault_balance)} | cb: ${esc(v.circuit_state||'?')}</div>`;
+      }
+      return `<div style="background:${bg};border:1px solid ${brd};border-radius:6px;padding:8px 10px;cursor:default"
+        title="${esc(v.status||'?')}">
+        <div style="display:flex;align-items:center;gap:5px;margin-bottom:2px">
+          <span style="width:7px;height:7px;border-radius:50%;background:${col};flex-shrink:0;animation:${ok?'pulse 2s infinite':'none'}"></span>
+          <span style="font-size:10px;font-weight:600;color:${col}">${ok?'OK':warn?'WARN':'ERR'}</span>
+        </div>
+        <div style="font-size:11px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(v.label||k)}</div>
+        ${extra}
+      </div>`;
+    });
+  el.style.gridTemplateColumns = `repeat(${Math.min(cards.length, 5)}, 1fr)`;
+  el.innerHTML = cards.join('');
+}
+
+// Open a URL directly in the built-in browser tab
+function openInBrowser(url) {
+  go('browser');
+  const inp = $('br-url-input');
+  if (inp) inp.value = url;
+  if (typeof browserNavigate === 'function') browserNavigate();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ДОХОДЫ
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadRevenue() {
+  const d = await api(HYP+'/api/v1/revenue/radar');
+  if (!d) { showNoData(['rev-kpis','rev-tbl','rev-phases']); return; }
+  const streams = d.revenue_streams||[], pct = +(d.progress_pct||0);
+  $('rev-kpis').innerHTML = [
+    statCard('$'+fmtN(d.total_revenue_usd||0), 'Общий доход', '', 'stat-grn'),
+    statCard('$'+fmtN(d.monthly_target_usd||0), 'Месячная цель'),
+    statCard(pct.toFixed(1)+'%', 'Прогресс к цели', bar(pct,'yel'), 'stat-yel'),
+    statCard(streams.length, 'Активных потоков', '', 'stat-acc'),
+  ].join('');
+
+  $('rev-tbl').innerHTML = streams.map(s => `<tr>
+    <td><b style="color:var(--acc)">${esc(s.name||'')}</b></td>
+    <td style="font-size:11px;color:var(--txt3);font-family:'Consolas',monospace">${esc(s.agent||'')}</td>
+    <td style="color:var(--grn);font-weight:700">$${fmtN(s.revenue_usd||0)}</td>
+    <td>${bdg(s.status||'?', s.status==='ACTIVE'?'g':s.status==='SETUP'?'y':'b')}</td>
+  </tr>`).join('') || '<tr><td colspan="4" style="text-align:center;padding:20px;color:var(--txt3)">Нет данных о потоках доходов</td></tr>';
+
+  const phases = [
+    {k:'phase_1_target', n:'Фаза 1 — Россия/Казахстан/Беларусь/Украина'},
+    {k:'phase_2_target', n:'Фаза 2 — Глобальный английский рынок'},
+    {k:'phase_3_target', n:'Фаза 3 — APAC (Азия-Пацифик)'},
+  ];
+  $('rev-phases').innerHTML = phases.map(p => {
+    const t=d[p.k]||0, pg=t>0?Math.min((d.total_revenue_usd||0)/t*100,100):0;
+    const cls = pg>=100?'grn':pg>=50?'yel':'acc';
+    return `<div class="phase-item">
+      <div class="phase-head"><span class="phase-name">${p.n}</span><span class="phase-target">$${fmtN(t)}</span></div>
+      ${bar(pg,cls)}
+      <div class="phase-pct">${pg.toFixed(1)}% от цели — текущий доход $${fmtN(d.total_revenue_usd||0)}</div>
+    </div>`;
+  }).join('');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  АГЕНТЫ
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadAgents() {
+  const [lo, lh] = await Promise.all([api('/api/agents'), api(HYP+'/api/v1/agents/fleet')]);
+  const fleet = lh?(lh.fleet||[]):(lo?(lo.agents||[]):[]);
+  const total = lh?lh.total_agents:fleet.length;
+  const byR = lh?(lh.by_rank||{}):{};
+  const byD = lh?(lh.by_department||{}):{};
+  const avgQ = lh?(lh.avg_quality||0):0;
+
+  $('ag-kpis').innerHTML = [
+    statCard(total||0,'Всего агентов','','stat-acc'),
+    statCard(avgQ,'Ср. качество','/100',avgQ>=80?'stat-grn':''),
+    statCard(byR.ELITE||0,'Элитных','уровень ELITE','stat-pur'),
+    statCard(Object.keys(byD).length,'Отделов','',''),
+  ].join('');
+
+  const rCls = {ELITE:'p',SENIOR:'b',MID:'g',JUNIOR:'y'};
+  const rName = {ELITE:'Элита',SENIOR:'Старший',MID:'Средний',JUNIOR:'Новичок'};
+  $('ag-rank').innerHTML = Object.entries(byR).map(([r,n]) =>
+    `<div class="row"><span class="row-left">${bdg(rName[r]||r, rCls[r]||'b')}</span><b style="color:#ddeeff;font-size:14px">${n}</b></div>`
+  ).join('') || '<div style="color:var(--txt3);padding:10px;font-size:12px">Данные по уровням недоступны</div>';
+
+  $('ag-dept').innerHTML = Object.entries(byD).map(([dep,n]) =>
+    `<div class="row"><span class="row-left">${esc(dep)}</span><span style="color:var(--acc);font-weight:700">${n}</span></div>`
+  ).join('') || '<div style="color:var(--txt3);padding:10px;font-size:12px">Данные по отделам недоступны</div>';
+
+  $('ag-tbl').innerHTML = fleet.slice(0,120).map(a => {
+    const q = +(a.quality_score||0);
+    const qc = q>=90?'#00d880':q>=75?'#3ab8e8':q>=60?'#ffb800':'#ff3050';
+    return `<tr>
+      <td style="font-family:'Consolas',monospace;font-size:11px;color:#ddeeff">${esc(a.name||a.file||'?')}</td>
+      <td style="font-size:11px;color:var(--txt2)">${esc(a.department||'—')}</td>
+      <td>${bdg(rName[a.rank]||a.rank||'MID', rCls[a.rank||'MID']||'b')}</td>
+      <td><span style="color:${qc};font-weight:700">${q||'—'}</span></td>
+      <td>${bdg(a.status==='active'?'активен':a.status||'?', a.status==='active'?'g':'y')}</td>
+      <td style="font-size:11px;color:var(--txt3);max-width:200px">${esc((a.desc||a.schedule||'—').slice(0,50))}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--txt3)">Нет данных о флоте агентов</td></tr>';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ЗАДАЧИ
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadTasks() {
+  const d = await api('/api/tasks');
+  if (!d) return;
+  const tasks = d.tasks||[], st = d.stats||{};
+  $('task-kpis').innerHTML = [
+    statCard(tasks.length,'Задач всего','',''),
+    statCard(st.running||0,'Активных','','stat-grn'),
+    statCard(st.completed||0,'Завершено','','stat-acc'),
+    statCard(st.failed||0,'Ошибок','',st.failed>0?'stat-red':''),
+  ].join('');
+
+  const stMap = {running:'g',completed:'b',failed:'r',pending:'y'};
+  const stName = {running:'активна',completed:'завершена',failed:'ошибка',pending:'ожидание'};
+  $('task-tbl').innerHTML = tasks.slice(0,60).map(t => `<tr>
+    <td style="font-family:'Consolas',monospace;font-size:10px;color:var(--txt3)">${esc((t.id||'').slice(0,18))}</td>
+    <td style="font-size:11px;color:var(--acc)">${esc(t.agent||'—')}</td>
+    <td style="max-width:240px;font-size:11px">${esc((t.description||'').slice(0,70))}</td>
+    <td>${bdg(stName[t.status]||t.status||'?', stMap[t.status]||'y')}</td>
+    <td style="font-size:11px;color:var(--txt3)">${esc(t.source||'—')}</td>
+    <td style="font-size:11px;color:var(--txt3);white-space:nowrap">${fmtT(t.updated_at||t.created_at)}</td>
+  </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--txt3)">Задач пока нет</td></tr>';
+}
+
+async function runPipeline() {
+  const goal = $('pipe-goal').value.trim() || 'Общий анализ';
+  const tagsRaw = $('pipe-tags').value.trim() || 'general';
+  const tags = tagsRaw.split(',').map(s=>s.trim()).filter(Boolean);
+  const prompt = $('pipe-prompt').value.trim() || goal;
+  const btn = $('pipe-btn');
+  btn.disabled = true; btn.textContent = '⏳ Выполняется...';
+  $('pipe-res').textContent = 'Выполняется pipeline...';
+  $('pipe-info').textContent = '';
+
+  const r = await api(HYP+'/api/v2/pipeline/run',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({task_id:'ui_'+Date.now(), goal, tags, prompt})
+  });
+
+  btn.disabled = false; btn.textContent = '▶ Запустить';
+  if (!r) { showFb('pipe-fb','Ошибка выполнения',false); $('pipe-res').textContent='Ошибка: нет ответа от сервера'; return; }
+
+  const ok = r.status === 'completed';
+  showFb('pipe-fb', ok?'✓ Успешно':'⚠ '+r.status, ok);
+  $('pipe-info').textContent = `Статус: ${r.status} | Время: ${r.elapsed_ms||0}мс | Навыки: ${(r.skills_used||[]).join(', ')||'—'}`;
+  $('pipe-res').textContent = JSON.stringify(r, null, 2);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  КАЧЕСТВО + SLO
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadQuality() {
+  const [ql,sl] = await Promise.all([
+    api(HYP+'/api/v1/quality/lab'),
+    api(HYP+'/api/v1/task-flow/slo')
+  ]);
+
+  if (ql) {
+    const g=ql.grade_distribution||{}, bl=ql.improvement_backlog||[];
+    const avg=ql.avg_score||0;
+    $('ql-kpis').innerHTML = [
+      statCard(avg,'Средний балл','/100',avg>=80?'stat-grn':avg>=60?'':'stat-red'),
+      statCard(ql.agents_audited||0,'Проверено агентов',''),
+      statCard(bl.length,'В очереди улучш.',''),
+      statCard(ql.last_audit==='never'?'Нет':fmtT(ql.last_audit),'Последний аудит',''),
+    ].join('');
+
+    const gcls = {A:'g',B:'b',C:'y',D:'r',F:'r'};
+    const gname = {A:'Отлично',B:'Хорошо',C:'Удовлетворит.',D:'Плохо',F:'Провал'};
+    $('ql-grades').innerHTML = Object.entries(g).map(([gr,n]) => {
+      const p = ql.agents_audited?Math.round(n/ql.agents_audited*100):0;
+      return `<div style="margin-bottom:12px">
+        <div class="row">
+          <span class="row-left"><span class="grade-${gr.toLowerCase()}">${gr}</span><span style="font-size:12px"> — ${gname[gr]||gr}</span></span>
+          <b style="color:#ddeeff">${n} (${p}%)</b>
+        </div>
+        ${bar(p, gr==='A'||gr==='B'?'grn':gr==='C'?'yel':'red')}
+      </div>`;
+    }).join('') || '<div class="alert alert-b">ℹ Аудит ещё не проводился. Quality Guardian запускается каждые 6 часов.</div>';
+
+    $('ql-backlog').innerHTML = bl.slice(0,12).map(i =>
+      `<div class="row"><span class="row-left" style="font-size:11px">${esc(i.agent||String(i))}</span>${bdg(i.priority==='high'?'высокий':i.priority==='low'?'низкий':'средний',i.priority==='high'?'r':'y')}</div>`
+    ).join('') || '<div class="alert alert-g">✅ Очередь пуста — все агенты в порядке</div>';
+  }
+
+  if (sl) {
+    const s=sl.slo_status||{}, pipe=sl.pipeline||{};
+    const p95 = s.p95_latency_ms||0, tgt = sl.slo_target_p95_ms||1500;
+    $('slo-kpis').innerHTML = [
+      statCard(fmtMs(s.p50_latency_ms||0),'Медиана (P50)','цель: 500мс'),
+      statCard(fmtMs(p95),'Перцентиль P95',sl.slo_breach?'⚠ НАРУШЕНИЕ SLO':'в норме',p95>tgt?'stat-red':'stat-grn'),
+      statCard(fmtMs(s.p99_latency_ms||0),'Перцентиль P99',''),
+      statCard((sl.throughput_tasks_per_min||0).toFixed(2),'Задач/минуту',''),
+    ].join('');
+
+    $('slo-lat').innerHTML = [
+      {l:'P50',v:s.p50_latency_ms||0,t:500,n:'Медиана'},
+      {l:'P95',v:p95,t:tgt,n:'95-й перц.'},
+      {l:'P99',v:s.p99_latency_ms||0,t:tgt*2,n:'99-й перц.'}
+    ].map(p => {
+      const pct=clamp(p.t>0?p.v/p.t*100:0,0,100), c=pct<70?'grn':pct<90?'yel':'red';
+      return `<div style="margin-bottom:12px">
+        <div class="row"><span class="row-left"><b>${p.l}</b> ${p.n}</span><span style="color:#ddeeff;font-weight:700">${fmtMs(p.v)}</span></div>
+        ${bar(pct,c)}<div style="font-size:10px;color:var(--txt3);margin-top:3px">цель: ${fmtMs(p.t)} | ${pct.toFixed(0)}%</div>
+      </div>`;
+    }).join('');
+
+    $('slo-pipe').innerHTML = Object.entries(pipe).map(([k,v]) =>
+      `<div class="row"><span class="row-left">${esc(k)}</span><span style="color:var(--acc)">${fmtN(v)}</span></div>`
+    ).join('') || '<div style="color:var(--txt3);padding:10px;font-size:12px">Нет данных Pipeline</div>';
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ИНЦИДЕНТЫ
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadFailures() {
+  const [fc,lg] = await Promise.all([
+    api(HYP+'/api/v1/failures/clusters'),
+    api(HYP+'/api/v1/ledger')
+  ]);
+
+  if (fc) {
+    const cl=fc.clusters||[], active=cl.filter(c=>!c.suppressed).length;
+    $('fail-kpis').innerHTML = [
+      statCard(fc.total||0,'Кластеров ошибок','',fc.total>0?'stat-red':''),
+      statCard(active,'Активных','','',active>0?'stat-red':''),
+      statCard(fc.alert_governor_active?'ВКЛ':'ВЫКЛ','Управление алертами','',fc.alert_governor_active?'stat-yel':''),
+    ].join('');
+
+    $('fail-tbl').innerHTML = cl.map(c => {
+      const sv=+(c.severity_score||0), sc=sv>0.7?'r':sv>0.4?'y':'g';
+      return `<tr>
+        <td style="font-family:'Consolas',monospace;font-size:10px;color:var(--txt3)">${esc((c.cluster_hash||'').slice(0,20))}</td>
+        <td style="font-size:11px;max-width:180px">${esc((c.root_cause_shortlist||c.root_cause||'—').slice(0,60))}</td>
+        <td style="color:var(--acc);font-weight:700">${c.hit_count||0}</td>
+        <td>${bdg(sv.toFixed(2),sc)}</td>
+        <td style="font-size:11px;color:var(--txt3)">${fmtDT(c.last_seen)}</td>
+        <td>${bdg(c.suppressed?'подавлен':'активен',c.suppressed?'b':'r')}</td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--txt3)">✅ Кластеров ошибок нет — система стабильна</td></tr>';
+  }
+
+  if (lg) {
+    const entries=lg.entries||[];
+    const actMap={'kill_switch':'Kill Switch','block_retries':'Блок ретраев','rollback':'Откат','switch_backup':'Резерв'};
+    $('lgr-tbl').innerHTML = entries.map(e => `<tr>
+      <td style="font-size:10px;color:var(--txt3);white-space:nowrap">${fmtDT(e.ts)}</td>
+      <td>${bdg(esc(e.initiator||'?'),'b')}</td>
+      <td>${bdg(actMap[e.action_type]||esc(e.action_type||'?'),e.action_type==='kill_switch'?'r':'g')}</td>
+      <td style="font-size:11px;font-family:'Consolas',monospace">${esc(e.target||'—')}</td>
+      <td style="font-size:11px;color:var(--txt3);max-width:180px">${esc((e.reason||'').slice(0,60))}</td>
+    </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;padding:14px;color:var(--txt3)">Журнал пуст</td></tr>';
+  }
+}
+
+async function doIncident(action) {
+  const actionNames = {kill_switch:'KILL SWITCH',block_retries:'Блокировка ретраев',rollback:'Откат',switch_backup:'Переключение на резерв'};
+  const fb = $('incident-feedback');
+  fb.innerHTML = `<div class="alert alert-b">⏳ Выполняется: ${actionNames[action]||action}...</div>`;
+
+  const r = await api(HYP+'/api/v1/incidents/action',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action, target:'all', reason:'ручное управление из панели'})
+  });
+
+  if (r) {
+    fb.innerHTML = `<div class="alert alert-g">✅ Выполнено: ${actionNames[action]||action} — ${r.status||'ok'}</div>`;
+    setTimeout(() => { loaded.failures=false; loadFailures(); }, 1000);
+  } else {
+    fb.innerHTML = `<div class="alert alert-r">❌ Ошибка выполнения команды ${actionNames[action]||action}</div>`;
+  }
+  setTimeout(() => fb.innerHTML='', 5000);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ЭВОЛЮЦИЯ
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadEvolution() {
+  const d = await api(HYP+'/api/v1/evolution/arena');
+  if (!d) return;
+  const wl=d.wishlist||[], cr=d.recently_created||[];
+
+  $('ev-kpis').innerHTML = [
+    statCard(d.factory_created||0,'Создано агентов','','stat-grn'),
+    statCard(d.factory_wishlist||0,'В списке желаний',''),
+    statCard(d.autonomy_level||0,'Уровень автономии','/10','stat-acc'),
+    statCard(d.canary_deployments||0,'Canary деплоев',''),
+  ].join('');
+
+  $('ev-wish').innerHTML = wl.slice(0,10).map(w =>
+    `<div class="row"><span class="row-left" style="font-size:11px">${esc(w.name||w.class||String(w))}</span>${bdg('P'+(w.priority||1),'b')}</div>`
+  ).join('') || '<div style="color:var(--txt3);padding:10px;font-size:12px">Список желаний пуст</div>';
+
+  $('ev-made').innerHTML = cr.slice(0,10).map(a =>
+    `<div class="row"><span class="row-left" style="color:var(--grn);font-size:11px">✓ ${esc(a.name||String(a))}</span>${bdg('создан','g')}</div>`
+  ).join('') || '<div style="color:var(--txt3);padding:10px;font-size:12px">Ни одного агента ещё не создано</div>';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ПЛАТФОРМЫ
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadPlatforms() {
+  const d = window.__PL__ || await api(HYP+'/api/v2/fleet/control');
+  window.__PL__ = null;
+  if (!d) return;
+  const adp=d.adapters||[], cl=d.clusters||[];
+
+  $('pl-kpis').innerHTML = [
+    statCard(d.total_adapters||0,'Адаптеров всего','','stat-acc'),
+    statCard(d.live_count||0,'Подключено','Live режим','stat-grn'),
+    statCard((d.total_adapters||0)-(d.live_count||0),'В режиме Mock','тестовый режим'),
+    statCard((d.graph||{}).active_skills||30,'Навыков в графе','Skill Graph'),
+  ].join('');
+
+  const clusterNames = {A:'Труд (Labor)',B:'DePIN',C:'Дивизионы',D:'Discovery'};
+  $('pl-clusters').innerHTML = cl.map(c => `<div class="card" style="padding:14px">
+    <div style="font-size:10px;color:var(--txt3);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Кластер ${esc(c.cluster)}</div>
+    <div style="font-size:14px;font-weight:700;color:#ddeeff;margin-bottom:2px">${esc(clusterNames[c.cluster]||c.name)}</div>
+    <div style="font-size:24px;font-weight:800;color:var(--acc);margin:6px 0">${c.total}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+      ${bdg(c.live_connections+' live','g')} ${bdg(c.mock_mode+' mock','y')}
+    </div>
+    ${bar(c.readiness_pct||0,'acc')}
+    <div style="font-size:10px;color:var(--txt3);margin-top:3px">${(c.readiness_pct||0).toFixed(0)}% подключено</div>
+  </div>`).join('');
+
+  $('pl-tbl').innerHTML = adp.map(a => `<tr>
+    <td style="font-family:'Consolas',monospace;color:var(--acc);font-weight:700">${esc(a.id)}</td>
+    <td>${bdg('C'+a.cluster,'b')}</td>
+    <td>${bdg(a.mock?'Mock':'Live',a.mock?'y':'g')}</td>
+    <td style="font-weight:700;color:${(+a.ev||0)>0.8?'var(--grn)':(+a.ev||0)>0.5?'var(--acc)':'var(--yel)'}">${a.ev||'—'}</td>
+    <td>${a.key_set?bdg('Ключ есть','g'):bdg('Нет ключа','y')}</td>
+  </tr>`).join('');
+
+
+  // Registration status section
+  const pd = await api('/api/v1/platforms');
+  if (pd) {
+    const s = pd.summary || {};
+    $('pl-reg-kpis').innerHTML = [
+      statCard(s.ok||0,'Зарегистрировано','платформ','stat-grn'),
+      statCard(s.pending||0,'Ожидают верификации','email verify'),
+      statCard(s.not_done||0,'Не готовы','нужна работа'),
+      statCard((pd.assets||[]).length,'Content assets','файлов'),
+    ].join('');
+
+    const stColors = {
+      logged_in:'g', registered:'g', already_exists:'g', bot_created:'g', agent_created:'g',
+      verify_email:'y', partial:'y', login_attempted:'y',
+      no_form_found:'r', captcha_blocked:'r', error:'r', unknown:'r', not_started:'r'
+    };
+    const stLabels = {
+      logged_in:'✅ Залогинен', registered:'✅ Зарег.', already_exists:'✅ Аккаунт есть',
+      bot_created:'✅ Бот создан', agent_created:'✅ Агент создан',
+      verify_email:'📧 Верифик.', partial:'⏳ Частично', login_attempted:'⏳ Вход попытка',
+      no_form_found:'❌ Форма не найдена', captcha_blocked:'⛔ Каптча', error:'❌ Ошибка',
+      unknown:'❓ Неизвестно', not_started:'⬜ Не начато'
+    };
+    $('pl-reg-tbl').innerHTML = (pd.platforms||[]).map(p => `<tr>
+      <td style="font-family:'Consolas',monospace;font-weight:700;color:var(--acc)">${esc(p.name)}</td>
+      <td>${bdg(stLabels[p.status]||p.status, stColors[p.status]||'r')}</td>
+      <td style="font-size:11px;color:var(--txt3)">${esc((p.note||'').toString().slice(0,50))}</td>
+    </tr>`).join('');
+
+    $('pl-api-list').innerHTML = (pd.api_endpoints||[]).map(ep =>
+      `<div style="font-family:'Consolas',monospace;font-size:12px;padding:3px 0;color:var(--acc)">${esc(ep)}</div>`
+    ).join('') + '<div style="font-size:11px;color:var(--txt3);margin-top:8px">Все endpoints: POST /api/v1/webhook, /ai, /lead | GET /api/v1/packs, /manifest, /status</div>';
+  }
+
+}
+
+
+  // Registration status section
+
+async function loadSkills() {
+  const d = await api(HYP+'/api/v2/skillgraph');
+  if (!d) return;
+  const g=d.skill_graph||{}, dv=d.divisions||{}, top=d.top_ev_opportunities||[];
+  const pipe=(d.pipeline||{}).strategic||{};
+
+  $('sk-kpis').innerHTML = [
+    statCard(g.total_skills||0,'Навыков в графе','','stat-acc'),
+    statCard(g.active_skills||0,'Активных','','stat-grn'),
+    statCard(Object.keys(dv).length,'Дивизионов','Кластер C'),
+    statCard('$'+(pipe.budget_remaining_usd||50),'Бюджет сегодня','осталось'),
+  ].join('');
+
+  $('sk-top').innerHTML = top.slice(0,12).map((s,i) => {
+    const ev=+(s.ev||0), ec=ev>0.8?'var(--grn)':ev>0.6?'var(--acc)':'var(--yel)';
+    return `<div class="skill-item">
+      <span class="skill-rank">${i+1}</span>
+      <span class="skill-name">${esc(s.id||'?')}</span>
+      <span class="skill-ev" style="color:${ec}">${s.ev}</span>
+    </div>`;
+  }).join('') || '<div style="color:var(--txt3);padding:10px;font-size:12px">Загрузка данных...</div>';
+
+  const divNames={div_revenue:'Доходы',div_content:'Контент',div_media:'Медиа',div_website:'Сайты',div_social:'Соцсети',div_finance:'Финансы',div_hr:'HR',div_infra:'Инфраструктура'};
+  $('sk-divs').innerHTML = Object.entries(dv).map(([n,h]) => {
+    const av=h.agents_available||0, tot=h.agents_total||1, p=Math.round(av/tot*100);
+    return `<div class="row"><span class="row-left">${esc(divNames[n]||n.replace('div_',''))}</span>${bdg(p+'%',p>80?'g':'y')}</div>`;
+  }).join('') || '<div style="color:var(--txt3);padding:10px">Нет данных</div>';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  СКАУТ
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadScout() {
+  const d = await api(HYP+'/api/v2/scout/status');
+  if (!d) return;
+  const lr=d.latest_run||{}, doms=d.research_domains||[];
+
+  $('sct-kpis').innerHTML = [
+    statCard(d.db_skill_nodes||0,'Skill Nodes в БД','','stat-acc'),
+    statCard(d.scout_findings_total||0,'Находок сохранено','',''),
+    statCard(doms.length,'Доменов исследований','',''),
+    statCard(lr.opportunities||0,'Возможностей найдено','в последнем прогоне','stat-grn'),
+  ].join('');
+
+  const domRu = {saas:'SaaS продукты',b2b_automation:'B2B автоматизация',ai_agents:'AI агенты',depin:'DePIN',freelance:'Фриланс',crypto:'Крипто',content:'Контент',lead_gen:'Лиды'};
+  $('sct-domains').innerHTML = doms.map(d =>
+    `<div class="row"><span class="row-left" style="font-family:'Consolas',monospace;font-size:11px">${esc(domRu[d]||d)}</span>${bdg('запланирован','b')}</div>`
+  ).join('') || '<div style="color:var(--txt3);padding:10px">Нет доменов</div>';
+
+  const fs=lr.findings_summary||[];
+  $('sct-finds').innerHTML = fs.length?fs.map(f =>
+    `<div style="margin-bottom:12px;padding:10px;background:#030810;border-radius:var(--r2);border-left:3px solid var(--acc)">
+      <div style="color:var(--acc);font-size:11px;font-weight:700;margin-bottom:4px">${esc(domRu[f.domain]||f.domain||'')}</div>
+      <div style="color:var(--txt2);font-size:11px">${esc(f.recommendation||'')}</div>
+    </div>`
+  ).join('') : `<div style="color:var(--txt3);padding:10px;font-size:12px">Следующий запуск: <span style="font-family:'Consolas',monospace;color:var(--acc)">${esc(d.scout_cron||'02:00 ежедневно')}</span></div>`;
+
+  const logEl = $('sct-log');
+  logEl.textContent = (d.log_tail||[]).join('\n') || 'Скаут ещё не запускался.';
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+async function runScout() {
+  const btn = $('scout-btn');
+  btn.disabled = true; btn.textContent = '⏳ Запуск...';
+  const r = await api(HYP+'/api/v2/scout/run',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  btn.disabled = false; btn.textContent = '🔭 Запустить Скаут сейчас';
+  if (r) {
+    showFb('scout-fb','✓ Скаут запущен — результаты через ~30с',true);
+    setTimeout(() => { loaded.scout=false; loadScout(); }, 35000);
+  } else {
+    showFb('scout-fb','❌ Ошибка запуска',false);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  МОДЕЛИ ИИ
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadLLM() {
+  const [llm,st] = await Promise.all([api('/api/llm'), api('/api/status')]);
+  if (!llm) { $('llm-prov').innerHTML='<div class="alert alert-r">Нет данных о моделях</div>'; return; }
+
+  const provs = Object.entries(llm);
+  const active = provs.filter(([,v])=>v&&(typeof v!=='object'||v.available!==false)).length;
+  $('llm-kpis').innerHTML = [
+    statCard(provs.length,'Провайдеров','',''),
+    statCard(active,'Активных','','stat-grn'),
+    statCard(st?('$'+(+(st.daily_cost_usd||0)).toFixed(4)):'—','Расходы сегодня',''),
+    statCard(st?(st.groq_only_mode?'ВКЛ':'ВЫКЛ'):'—','Режим Groq-only',st&&st.groq_only_mode?'экономия токенов':'',''),
+  ].join('');
+
+  const provRu = {openai:'OpenAI',anthropic:'Anthropic',groq:'Groq',together:'Together AI',cohere:'Cohere'};
+  $('llm-prov').innerHTML = provs.map(([name,v]) => {
+    if (!v||typeof v!=='object') return `<div class="row"><span class="row-left">${dot(false)}<span>${esc(provRu[name]||name)}</span></span>${bdg('N/A','y')}</div>`;
+    const ok = v.available!==false && !v.error && !v.tokens_exhausted && !v.rate_limited;
+    const issue = v.tokens_exhausted?'лимит токенов':v.rate_limited?'rate limit':v.error?'ошибка':'';
+    const model = v.model||v.models?.[0]||'';
+    return `<div class="row">
+      <span class="row-left">${dot(ok)}<span style="font-weight:600">${esc(provRu[name]||name)}</span>${model?`<span style="font-size:10px;color:var(--txt3);margin-left:4px">${esc(String(model).slice(0,25))}</span>`:''}</span>
+      <div style="display:flex;gap:6px;align-items:center">
+        ${issue?bdg(issue,'r'):''}
+        ${bdg(ok?'OK':'ОШИБКА',ok?'g':'r')}
+      </div>
+    </div>`;
+  }).join('');
+
+  if (st) {
+    $('llm-sys').innerHTML = [
+      ['Расходы сегодня','$'+(+(st.daily_cost_usd||0)).toFixed(4)],
+      ['Лимит расходов','$'+(st.cost_limit_usd||0)],
+      ['Режим Groq-only',st.groq_only_mode?'ВКЛЮЧЁН':'ВЫКЛЮЧЕН'],
+      ['Автономный режим',st.autonomy_enabled?'включён':'выключен'],
+      ['Уровень защиты',st.guardrail_level||0],
+      ['Brain',st.brain||'?'],
+      ['Watchdog',st.watchdog||'?'],
+    ].map(([l,v]) => `<div class="row"><span class="row-left">${esc(l)}</span><span style="color:var(--acc);font-weight:600">${esc(String(v))}</span></div>`).join('');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ЧАТ
+// ═══════════════════════════════════════════════════════════════════════════
+function appendMsg(text, isUser) {
+  const box = $('chat-box');
+  const div = document.createElement('div');
+  div.className = isUser?'msg-user':'msg-ai';
+  const time = new Date().toLocaleTimeString('ru-RU');
+  if (isUser) {
+    div.innerHTML = esc(text)+'<div class="msg-time">'+time+'</div>';
+  } else {
+    div.innerHTML = '<pre>'+esc(text)+'</pre><div class="msg-time">'+time+'</div>';
+  }
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+  return div;
+}
+
+async function sendChat() {
+  const inp=$('chat-inp'), msg=inp.value.trim();
+  if (!msg) return;
+  inp.value='';
+  appendMsg(msg, true);
+  const btn=$('chat-btn');
+  btn.disabled=true; btn.textContent='...';
+  const thinking=appendMsg('Думаю...', false);
+  const r = await api('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,source:'panel'})});
+  thinking.remove();
+  btn.disabled=false; btn.textContent='Отправить';
+  appendMsg(r?(r.reply||r.response||r.text||JSON.stringify(r)):'Нет ответа от сервера', false);
+}
+
+function quickChat(msg) { $('chat-inp').value=msg; sendChat(); }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ЛОГИ
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadLogs() {
+  const file=$('log-file').value, lines=$('log-lines').value||100;
+  $('log-name-fb').textContent = '↻ ' + file;
+  const d = await api('/api/logs?file='+encodeURIComponent(file)+'&lines='+lines);
+  const el=$('log-out');
+  if (!d||!d.lines) { el.textContent='Нет данных для файла: '+file; return; }
+  el.textContent = d.lines.join('\n') || 'Лог пустой';
+  el.scrollTop = el.scrollHeight;
+  $('log-name-fb').textContent = file + ' (' + (d.lines.length||0) + ' строк)';
+}
+
+function toggleAutolog() {
+  const btn=$('autolog-btn');
+  if (autologT) {
+    clearInterval(autologT); autologT=null;
+    btn.textContent='▶ Авто';
+    btn.classList.remove('btn-g');
+  } else {
+    loadLogs();
+    autologT=setInterval(loadLogs,3000);
+    btn.textContent='⏸ Стоп';
+    btn.classList.add('btn-g');
+  }
+}
+
+// ─── Utility ───────────────────────────────────────────────────────────────
+function showNoData(ids) { ids.forEach(id=>{ const el=$(id); if(el)el.innerHTML='<div class="alert alert-y">⚠ Нет данных</div>'; }); }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  BROWSER CONTROL v2
+// ═══════════════════════════════════════════════════════════════════════════
+let _brToken = '';
+let _brAutoT = null;
+
+function _brLog(msg, ok) {
+  const el = $('br-log');
+  if (!el) return;
+  const t = new Date().toLocaleTimeString();
+  const c = (ok===false) ? 'var(--red)' : 'var(--grn)';
+  el.innerHTML += '<div style="color:'+c+'">['+t+'] '+String(msg).replace(/</g,'&lt;')+'</div>';
+  el.scrollTop = el.scrollHeight;
+}
+
+function _brStateColor(s) {
+  const m = {INIT:'#6366f1',READY:'#22c55e',AI_ACTIVE:'#0ea5e9',
+    HUMAN_PENDING:'#f59e0b',HUMAN_ACTIVE:'#f97316',RECONCILING:'#8b5cf6',
+    RECOVERY:'#ec4899',SAFE_MODE:'#ef4444',QUARANTINED:'#dc2626',TERMINATED:'#374151'};
+  return m[s]||'#64748b';
+}
+
+async function loadBrowser() {
+  // State
+  try {
+    const d = await api('/api/browser/v2/state');
+    if (!d) return;
+    const sc = $('br-state-chip'); const oc = $('br-owner-chip');
+    if (sc) { sc.textContent = d.state||'UNKNOWN'; sc.style.background = _brStateColor(d.state); sc.style.color='#fff'; sc.style.border='none'; }
+    if (oc && d.lease) { oc.textContent = d.lease.owner||'no owner'; oc.style.color = (d.lease.owner&&d.lease.owner!=='none') ? 'var(--yel)' : 'var(--txt3)'; }
+  } catch(e) {}
+  // Screenshot
+  try {
+    const d2 = await api('/api/browser/v2/screenshot');
+    const img = $('br-screenshot'); const ns = $('br-no-screen');
+    if (d2&&d2.ok&&d2.image_b64&&img) {
+      img.src='data:image/png;base64,'+d2.image_b64; img.style.opacity='1';
+      if (ns) ns.style.display='none';
+    }
+    if (d2&&d2.url) { const u=$('br-current-url'); if(u) u.textContent=d2.url; }
+  } catch(e) {}
+  // Checkpoints
+  try {
+    const d3 = await api('/api/browser/v2/checkpoints');
+    const el = $('br-checkpoints-list');
+    if (el&&d3&&d3.checkpoints) {
+      if (!d3.checkpoints.length) { el.textContent='нет чекпоинтов'; return; }
+      el.innerHTML = d3.checkpoints.map(cp=>'<div style="padding:2px 0;border-bottom:1px solid var(--brd)"><span style="color:var(--acc)">'+
+        (cp.id||'?')+'</span> <span style="color:var(--txt3)">'+(cp.url||'')+'</span></div>').join('');
+    }
+  } catch(e) {}
+}
+
+async function browserStart() {
+  try {
+    const d = await api('/api/browser/v2/start','POST',{});
+    _brLog('Start: '+JSON.stringify(d), d&&d.ok);
+    await loadBrowser();
+    if (!_brAutoT) _brAutoT = setInterval(loadBrowser, 5000);
+  } catch(e) { _brLog('Start error: '+e, false); }
+}
+
+async function browserStop() {
+  try {
+    const d = await api('/api/browser/v2/stop','POST',{fencing_token:_brToken});
+    _brLog('Stop: '+JSON.stringify(d), d&&d.ok);
+    if (_brAutoT) { clearInterval(_brAutoT); _brAutoT=null; }
+    await loadBrowser();
+  } catch(e) { _brLog('Stop error: '+e, false); }
+}
+
+async function browserAcquireLease() {
+  try {
+    const d = await api('/api/browser/v2/lease/acquire','POST',{owner:'panel'});
+    if (d&&d.fencing_token) { _brToken=d.fencing_token; const el=$('br-token-display'); if(el)el.textContent=_brToken; }
+    _brLog('Lease: '+JSON.stringify(d), d&&d.ok);
+  } catch(e) { _brLog('Lease error: '+e, false); }
+}
+
+async function browserReleaseLease() {
+  try {
+    const d = await api('/api/browser/v2/lease/release','POST',{fencing_token:_brToken});
+    _brLog('Release: '+JSON.stringify(d), d&&d.ok);
+    _brToken=''; const el=$('br-token-display'); if(el)el.textContent='—';
+  } catch(e) { _brLog('Release error: '+e, false); }
+}
+
+async function browserNavigate() {
+  const url=($('br-url-input')||{}).value||''; if(!url) return;
+  try {
+    const d = await api('/api/browser/v2/action','POST',{fencing_token:_brToken,action:'navigate',params:{url}});
+    _brLog('Navigate '+url+': stage='+d.stage, d&&d.ok);
+    setTimeout(loadBrowser,1200);
+  } catch(e) { _brLog('Navigate error: '+e, false); }
+}
+
+async function browserExecuteAction() {
+  const action=($('br-action-select')||{}).value||'inspect';
+  let params={};
+  try { params=JSON.parse(($('br-action-params')||{}).value||'{}'); } catch(e) {}
+  try {
+    const d = await api('/api/browser/v2/action','POST',{fencing_token:_brToken,action,params});
+    _brLog(action+': '+JSON.stringify(d).slice(0,220), d&&d.ok);
+    if (['navigate','click','type','scroll'].includes(action)) setTimeout(loadBrowser,800);
+  } catch(e) { _brLog(action+' error: '+e, false); }
+}
+
+async function browserTakeoverRequest() {
+  try {
+    const d = await api('/api/browser/v2/takeover/request','POST',{fencing_token:_brToken});
+    _brLog('Takeover req: '+JSON.stringify(d), d&&d.ok); await loadBrowser();
+  } catch(e) { _brLog('Takeover error: '+e, false); }
+}
+
+async function browserTakeoverRelease() {
+  try {
+    const d = await api('/api/browser/v2/takeover/release','POST',{corrections:[]});
+    _brLog('Takeover release: '+JSON.stringify(d), d&&d.ok); await loadBrowser();
+  } catch(e) { _brLog('Release error: '+e, false); }
+}
+
+async function browserReconcile() {
+  try {
+    const d = await api('/api/browser/v2/reconcile','POST',{fencing_token:_brToken});
+    _brLog('Reconcile: '+JSON.stringify(d), d&&d.ok);
+  } catch(e) { _brLog('Reconcile error: '+e, false); }
+}
+
+async function browserRecover() {
+  try {
+    const d = await api('/api/browser/v2/recover','POST',{checkpoint_id:null});
+    _brLog('Recover: '+JSON.stringify(d), d&&d.ok); await loadBrowser();
+  } catch(e) { _brLog('Recover error: '+e, false); }
+}
+
+// ─── Init ──────────────────────────────────────────────────────────────────
+go('dash');
+</script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+# Requirements for saas_api_sales_materials
+python-dotenv
+httpx
+fastapi
+uvicorn

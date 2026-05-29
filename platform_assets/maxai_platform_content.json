@@ -1,0 +1,211 @@
+{
+  "brand": "MaxAI",
+  "tagline": "AI automation: Telegram bots, parsers, business workflows. Results in 2-3 days.",
+  "contact": "@maxai_corp",
+  "api_base": "http://77.90.2.171:8090",
+  "platforms": {
+    "n8n": {
+      "name": "MaxAI Telegram Bot Automation",
+      "tagline": "Connect Telegram to any API in 10 minutes",
+      "description": "Workflow template: incoming Telegram message -> MaxAI processing -> structured reply. No code needed. Deploy in one click.",
+      "use_case": "Automate Telegram bot responses with AI",
+      "audience": "Small business owners, solo developers, operations teams",
+      "cta": "Use template -> @maxai_corp",
+      "pricing": "Free template. Custom build from 3000 RUB / $33",
+      "demo": "http://77.90.2.171:8090",
+      "template_file": "n8n_telegram_bot.json",
+      "kpi": "template_uses, leads_via_cta"
+    },
+    "dify": {
+      "name": "MaxAI Support Bot",
+      "tagline": "Customer support bot with memory and escalation",
+      "description": "App template: user asks -> AI answers from knowledge base -> escalates to human if confidence < 80%. Russian + English.",
+      "use_case": "Automate first-line customer support",
+      "audience": "E-commerce, SaaS, service businesses",
+      "cta": "Install template -> @maxai_corp",
+      "pricing": "Free template. Full deploy from 5000 RUB",
+      "kpi": "installs, leads_via_cta"
+    },
+    "relevance_ai": {
+      "name": "MaxAI Lead Qualifier Agent",
+      "tagline": "Qualify leads 24/7, zero manual work",
+      "description": "Agent receives lead (name, company, request) -> scores intent -> routes to CRM or Telegram. Revenue outcome: 3x faster lead response.",
+      "use_case": "Automated B2B lead qualification",
+      "audience": "Sales teams, agencies, SaaS companies",
+      "cta": "Try agent -> @maxai_corp",
+      "pricing": "$33/month or one-time setup $150",
+      "kpi": "leads_qualified_per_day, response_time_seconds"
+    },
+    "pipedream": {
+      "name": "MaxAI Webhook Router",
+      "tagline": "Route webhooks to MaxAI, get structured results back",
+      "description": "Trigger: any webhook -> Action: MaxAI processes and returns JSON -> your app gets clean data. Ultra-light, no server needed.",
+      "use_case": "Webhook-to-AI data processing",
+      "audience": "Developers, no-code builders",
+      "cta": "Use workflow -> @maxai_corp",
+      "pricing": "Free workflow. Custom from $33",
+      "kpi": "webhook_invocations, leads"
+    },
+    "vellum": {
+      "name": "MaxAI Prompt Pack v1",
+      "tagline": "Versioned, tested prompts for business automation",
+      "description": "Prompt pack: lead qualifier, support handler, data extractor. Each version tested with evals. 0.1% hallucination tolerance.",
+      "use_case": "Enterprise prompt governance",
+      "audience": "Enterprise teams, AI developers",
+      "cta": "Try pack -> @maxai_corp",
+      "pricing": "$88 setup + $33/month maintenance",
+      "kpi": "prompt_versions, eval_pass_rate"
+    },
+    "huggingface": {
+      "name": "MaxAI Demo",
+      "tagline": "Try MaxAI AI automation free demo",
+      "description": "Public demo: send a task, get AI result. Supports: text processing, lead classification, data extraction. Full version on server.",
+      "use_case": "AI automation demo",
+      "audience": "Developers, potential clients",
+      "cta": "Full version -> @maxai_corp",
+      "app_file": "hf_app.py",
+      "kpi": "space_views, leads_via_cta"
+    },
+    "github": {
+      "name": "maxai-telegram-action",
+      "tagline": "GitHub Action: deploy Telegram bot in one step",
+      "description": "GitHub Action that deploys a MaxAI-powered Telegram bot to your server. Input: bot token + MaxAI API key. Output: running bot.",
+      "use_case": "CI/CD Telegram bot deployment",
+      "audience": "Developers, DevOps",
+      "cta": "Use action -> github.com/maxai-corp",
+      "pricing": "Free action. Custom bot from $33",
+      "kpi": "action_uses, stars"
+    },
+    "zapier": {
+      "name": "MaxAI AI Response",
+      "tagline": "Add AI to any Zapier workflow",
+      "description": "Zapier action: send text to MaxAI -> get structured AI response -> use in next step. One action, immediate result.",
+      "use_case": "Add AI processing to existing Zapier workflows",
+      "audience": "SMB owners, operations teams",
+      "cta": "Try Zap -> @maxai_corp",
+      "pricing": "Free Zap. MaxAI API from $33/month",
+      "kpi": "zap_uses, leads"
+    },
+    "make": {
+      "name": "MaxAI Scenario",
+      "tagline": "Visual AI workflow ready in 10 seconds",
+      "description": "Make scenario: receive form -> MaxAI processes -> send result to Telegram/email/CRM. Visual, drag-drop, no code.",
+      "use_case": "Form-to-AI-to-CRM automation",
+      "audience": "SMB, marketing teams",
+      "cta": "Clone scenario -> @maxai_corp",
+      "pricing": "Free scenario. Custom from 3000 RUB",
+      "kpi": "scenario_clones, leads"
+    },
+    "flowise": {
+      "name": "MaxAI Agent Chain",
+      "tagline": "Visual multi-agent chain with fallback",
+      "description": "Agent chain: input -> classifier -> specialist agent -> fallback -> output. Pre-built for customer support and lead handling.",
+      "use_case": "Visual AI agent chain for demos and clients",
+      "audience": "Developers, agencies, demo users",
+      "cta": "Import chain -> @maxai_corp",
+      "pricing": "Free template. Deploy from $55",
+      "kpi": "imports, leads"
+    },
+    "langflow": {
+      "name": "MaxAI RAG Pipeline",
+      "tagline": "Document Q&A pipeline production-ready",
+      "description": "Langflow flow: upload documents -> vector index -> user asks -> retrieval -> AI answer with source citation. Russian + English.",
+      "use_case": "Document-based Q&A for businesses",
+      "audience": "Companies with knowledge bases, legal firms, support teams",
+      "cta": "Clone flow -> @maxai_corp",
+      "pricing": "Free flow. Custom RAG from $88",
+      "kpi": "flow_clones, leads"
+    },
+    "coze": {
+      "name": "MaxAI Assistant",
+      "tagline": "Business automation assistant RU/EN",
+      "description": "Chat with MaxAI: send your task -> get solution for Telegram bot, parser, or automation. First answer free. Full service via @maxai_corp.",
+      "use_case": "Business automation consulting via chat",
+      "audience": "Russian-speaking business owners",
+      "cta": "Message @maxai_corp for full service",
+      "pricing": "Chat free. Projects from 3000 RUB",
+      "kpi": "messages, leads_to_telegram"
+    },
+    "poe": {
+      "name": "MaxAI",
+      "tagline": "AI assistant for business automation tasks",
+      "description": "Describe your business problem -> MaxAI suggests automation solution -> order full build via @maxai_corp. One scenario, one result.",
+      "use_case": "Business automation advisor",
+      "audience": "Entrepreneurs, SMB owners",
+      "cta": "Order full project -> @maxai_corp",
+      "pricing": "Advice free. Build from $33",
+      "kpi": "bot_messages, referrals"
+    },
+    "gpt_store": {
+      "name": "MaxAI Business Automator",
+      "tagline": "Automate your business process in one conversation",
+      "description": "Tell MaxAI what you do manually every day -> get exact automation blueprint -> order implementation via @maxai_corp. Practical pain, immediate solution.",
+      "use_case": "Business process automation blueprint",
+      "audience": "Business owners who do repetitive tasks manually",
+      "cta": "Order implementation -> @maxai_corp",
+      "pricing": "Blueprint free. Build from $33",
+      "kpi": "conversations, leads"
+    },
+    "dify_hub": {
+      "name": "MaxAI Customer Support Template",
+      "tagline": "Deploy support bot in 5 minutes",
+      "description": "Repeatable template: knowledge base upload -> AI answers -> escalation to human. Business intent: reduce support cost by 60%.",
+      "use_case": "Customer support automation",
+      "audience": "E-commerce, SaaS",
+      "install_steps": "1. Import template 2. Upload your FAQ 3. Set Telegram/webhook 4. Go live",
+      "cta": "Custom setup -> @maxai_corp",
+      "pricing": "Template free. Setup from $55",
+      "kpi": "installs, support_tickets_deflected"
+    },
+    "bitrix24": {
+      "name": "MaxAI Sales Assistant",
+      "tagline": "AI sales assistant for your CRM department",
+      "description": "Bitrix24 app: incoming lead -> MaxAI scores intent -> creates deal -> assigns to manager -> sends Telegram alert. Works as a team member.",
+      "use_case": "CRM lead processing automation",
+      "audience": "SMB with Bitrix24, sales teams",
+      "cta": "Install app -> @maxai_corp",
+      "pricing": "3000 RUB/month or one-time $88 setup",
+      "kpi": "leads_processed, deals_created"
+    },
+    "targetai": {
+      "name": "MaxAI Support Line",
+      "tagline": "First-line AI support one scenario one metric",
+      "description": "Voice/chat support agent: handles FAQ -> escalates to human at confidence < 80% -> logs every call. SLA: response in 5 seconds.",
+      "use_case": "First-line customer support",
+      "audience": "Call centers, e-commerce, telecom",
+      "cta": "Set up support line -> @maxai_corp",
+      "pricing": "$55 setup + $33/month",
+      "kpi": "calls_handled, escalation_rate"
+    },
+    "nodul": {
+      "name": "MaxAI Process Flow",
+      "tagline": "Simple reliable repeatable business process",
+      "description": "No-code flow: trigger (form/webhook/schedule) -> MaxAI action -> result to Telegram/email. Three steps, zero complexity.",
+      "use_case": "Operational process automation",
+      "audience": "Operations managers, SMB owners",
+      "cta": "Clone flow -> @maxai_corp",
+      "pricing": "Free flow. Custom from 3000 RUB",
+      "kpi": "flow_runs, leads"
+    },
+    "wikibot": {
+      "name": "MaxAI Telegram Support",
+      "tagline": "Telegram bot with reliable message handling",
+      "description": "Omnichannel bot: Telegram -> MaxAI -> structured reply. Handles commands, free text, media. Fallback to human. Reliability first.",
+      "use_case": "Telegram customer support bot",
+      "audience": "Businesses with Telegram presence",
+      "cta": "Deploy bot -> @maxai_corp",
+      "pricing": "5000 RUB setup + support",
+      "kpi": "messages_handled, response_time_ms"
+    },
+    "akash": {
+      "name": "MaxAI Worker Node",
+      "tagline": "Cheap compute for AI workloads",
+      "description": "Stateless MaxAI worker deployed on Akash Network. Handles CPU-intensive tasks: parsing, batch processing, model inference. Core logic stays on MaxAI server.",
+      "use_case": "Scalable compute for overflow tasks",
+      "audience": "MaxAI internal scaling",
+      "cta": "Scale with MaxAI -> @maxai_corp",
+      "pricing": "Infrastructure cost + 20% margin",
+      "kpi": "tasks_processed, cost_per_task_usd"
+    }
+  }
+}

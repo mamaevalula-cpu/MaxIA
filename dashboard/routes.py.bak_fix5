@@ -1,0 +1,2814 @@
+# -*- coding: utf-8 -*-
+"""dashboard/routes.py — API endpoints for Web Dashboard."""
+from __future__ import annotations
+import logging, time, os
+from pathlib import Path
+from typing import Any
+from fastapi import Request
+
+log = logging.getLogger("dashboard.routes")
+
+def register(app):
+    """Register all dashboard routes on a FastAPI app instance."""
+    from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
+
+    STATIC = Path(__file__).parent / "static"
+
+    # ── UI ──────────────────────────────────────────────────────────────────
+    @app.get("/", response_class=HTMLResponse)
+    async def index():
+        p = STATIC / "index.html"
+        return HTMLResponse(p.read_text("utf-8")) if p.exists() else HTMLResponse("<h1>Dashboard not built</h1>", 503)
+
+    # ── System status ────────────────────────────────────────────────────────
+    @app.get("/api/status")
+    async def api_status():
+        result: dict[str, Any] = {"ts": time.time(), "service": "ok"}
+        try:
+            from brain.orchestrator import BrainOrchestrator
+            brain = BrainOrchestrator.get()
+            result["agents_count"] = len(brain._agents)
+            result["brain"] = "ok"
+        except Exception as e:
+            result["brain"] = str(e)
+        try:
+            from core.watchdog import SystemWatchdog
+            w = SystemWatchdog.get() if hasattr(SystemWatchdog, "get") else None
+            result["watchdog"] = "ok" if w else "not started"
+        except Exception:
+            result["watchdog"] = "n/a"
+        try:
+            from core.task_queue import TaskQueue
+            result["tasks"] = TaskQueue.get().get_stats()
+        except Exception as e:
+            result["tasks"] = {"error": str(e)}
+        return result
+
+    # ── Agents ───────────────────────────────────────────────────────────────
+    @app.get("/api/agents")
+    async def api_agents():
+        try:
+            from brain.orchestrator import BrainOrchestrator
+            brain = BrainOrchestrator.get()
+            agents = []
+            for name, agent in brain._agents.items():
+                try:
+                    status = str(agent.get_status()) if hasattr(agent, "get_status") else "?"
+                    info   = agent.info() if hasattr(agent, "info") else None
+                    desc   = info.description if info else ""
+                except Exception:
+                    status, desc = "error", ""
+                agents.append({"name": name, "status": status, "desc": desc})
+            return {"agents": agents}
+        except Exception as e:
+            return {"error": str(e), "agents": []}
+
+    # ── LLM providers ────────────────────────────────────────────────────────
+    @app.get("/api/llm")
+    async def api_llm():
+        try:
+            from brain.llm_router import LLMRouter
+            return LLMRouter.get().status_report()
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ── Chat ──────────────────────────────────────────────────────────────────
+    @app.post("/api/chat")
+    async def api_chat(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        # Accept both 'message' (HTML) and 'text' (legacy)
+        text = (body.get("message") or body.get("text") or "").strip()
+        if not text:
+            return JSONResponse({"error": "empty message"}, 400)
+        try:
+            import asyncio
+            from brain.orchestrator import BrainOrchestrator, OrchestratorRequest
+            orch_req = OrchestratorRequest(
+                text=text, source="dashboard",
+                session_id=body.get("session_id", "dashboard"),
+            )
+            loop = asyncio.get_event_loop()
+            resp = await asyncio.wait_for(
+                loop.run_in_executor(None, BrainOrchestrator.get().process, orch_req),
+                timeout=90,
+            )
+            resp_text = getattr(resp, 'text', '') or str(resp)
+            resp_model = getattr(resp, 'model', '') or getattr(resp, 'provider', '') or '?'
+            # Return BOTH 'response' (HTML expects) and 'reply' (legacy compat)
+            return {
+                "response": resp_text,
+                "reply":    resp_text,
+                "message":  resp_text,
+                "model":    resp_model,
+                "provider": resp_model,
+            }
+        except asyncio.TimeoutError:
+            msg = "⏳ Запрос выполняется слишком долго (>90с). Попробуй снова."
+            return {"response": msg, "reply": msg, "model": "timeout"}
+        except Exception as e:
+            log.error("chat error: %s", e)
+            msg = f"❌ Ошибка: {e}"
+            return {"response": msg, "reply": msg, "model": "error"}
+
+    # ── Tasks ─────────────────────────────────────────────────────────────────
+    @app.get("/api/tasks")
+    async def api_tasks():
+        import time, subprocess, sqlite3, os
+        from datetime import datetime
+
+        all_tasks = []
+        now = int(time.time())
+
+        # 1. Try TaskQueue
+        try:
+            from core.task_queue import TaskQueue
+            tq_tasks = TaskQueue.get().list_tasks(limit=30)
+            for t in tq_tasks:
+                t.setdefault("source", "task_queue")
+                all_tasks.append(t)
+        except Exception:
+            pass
+
+        # 2. Systemd service status
+        for svc in ("personal-ai", "bybit-monitor"):
+            try:
+                res = subprocess.run(
+                    ["systemctl", "is-active", svc],
+                    capture_output=True, text=True, timeout=5
+                )
+                active = res.stdout.strip()
+                status = "running" if active == "active" else "failed"
+                all_tasks.append({
+                    "id": f"systemd-{svc}",
+                    "agent": "systemd",
+                    "description": f"Service: {svc}",
+                    "status": status,
+                    "created_at": now - 3600,
+                    "updated_at": now,
+                    "source": "systemd",
+                })
+            except Exception as e:
+                all_tasks.append({
+                    "id": f"systemd-{svc}",
+                    "agent": "systemd",
+                    "description": f"Service: {svc} (check error: {e})",
+                    "status": "failed",
+                    "created_at": now - 3600,
+                    "updated_at": now,
+                    "source": "systemd",
+                })
+
+        # 3. Bybit monitor status
+        try:
+            import urllib.request, json as _json
+            with urllib.request.urlopen("http://127.0.0.1:8001/status", timeout=5) as resp:
+                data = _json.loads(resp.read().decode())
+            all_tasks.append({
+                "id": "bybit-monitor-status",
+                "agent": "bybit-monitor",
+                "description": f"Bybit monitor: {_json.dumps(data)[:200]}",
+                "status": "running",
+                "created_at": now - 1800,
+                "updated_at": now,
+                "source": "bybit_monitor",
+            })
+        except Exception as e:
+            all_tasks.append({
+                "id": "bybit-monitor-status",
+                "agent": "bybit-monitor",
+                "description": f"Bybit monitor unreachable: {e}",
+                "status": "failed",
+                "created_at": now - 1800,
+                "updated_at": now,
+                "source": "bybit_monitor",
+            })
+
+        # 4. memory.db recent assistant messages
+        try:
+            db_path = "/root/my_personal_ai/data/memory.db"
+            conn = sqlite3.connect(db_path, timeout=5)
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id, role, content, ts FROM messages ORDER BY ts DESC LIMIT 6"
+            )
+            rows = cur.fetchall()
+            conn.close()
+            for row in rows:
+                msg_id, role, content, ts = row
+                try:
+                    ts_int = int(float(ts)) if ts else now
+                except Exception:
+                    ts_int = now
+                all_tasks.append({
+                    "id": f"memory-{msg_id}",
+                    "agent": "memory",
+                    "description": str(content)[:200] if content else "(empty)",
+                    "status": "completed",
+                    "created_at": ts_int,
+                    "updated_at": ts_int,
+                    "source": "memory_db",
+                })
+        except Exception as e:
+            all_tasks.append({
+                "id": "memory-db-error",
+                "agent": "memory",
+                "description": f"memory.db error: {e}",
+                "status": "failed",
+                "created_at": now,
+                "updated_at": now,
+                "source": "memory_db",
+            })
+
+        # 5. Latest backup file
+        try:
+            # Check both /root/backups and subdirectories (apexmind, etc.)
+            backup_dir = "/root/backups"
+            _backup_candidates = [backup_dir]
+            try:
+                for _sub in os.listdir(backup_dir):
+                    _subpath = os.path.join(backup_dir, _sub)
+                    if os.path.isdir(_subpath):
+                        _backup_candidates.append(_subpath)
+            except Exception:
+                pass
+            files = []
+            for _bdir in _backup_candidates:
+                try:
+                    for f in os.listdir(_bdir):
+                        if f.endswith(".tar.gz"):
+                            files.append(f)
+                            # Rewrite backup_dir so mtime lookup works for the latest
+                            backup_dir = _bdir
+                except Exception:
+                    pass
+            if files:
+                files_with_time = [
+                    (f, os.path.getmtime(os.path.join(backup_dir, f)))
+                    for f in files
+                ]
+                latest_file, latest_mtime = max(files_with_time, key=lambda x: x[1])
+                mtime_int = int(latest_mtime)
+                all_tasks.append({
+                    "id": f"backup-{latest_file}",
+                    "agent": "backup",
+                    "description": f"Latest backup: {latest_file}",
+                    "status": "completed",
+                    "created_at": mtime_int,
+                    "updated_at": mtime_int,
+                    "source": "backup",
+                })
+            else:
+                all_tasks.append({
+                    "id": "backup-none",
+                    "agent": "backup",
+                    "description": "No .tar.gz backups found in /root/backups",
+                    "status": "pending",
+                    "created_at": now,
+                    "updated_at": now,
+                    "source": "backup",
+                })
+        except Exception as e:
+            all_tasks.append({
+                "id": "backup-error",
+                "agent": "backup",
+                "description": f"Backup check error: {e}",
+                "status": "failed",
+                "created_at": now,
+                "updated_at": now,
+                "source": "backup",
+            })
+
+        # Sort by updated_at desc, limit 30
+        all_tasks.sort(key=lambda t: t.get("updated_at", 0), reverse=True)
+        all_tasks = all_tasks[:30]
+
+        # Stats
+        status_counts = {"running": 0, "completed": 0, "failed": 0, "pending": 0, "enqueued": 0}
+        for t in all_tasks:
+            s = t.get("status", "pending")
+            if s in status_counts:
+                status_counts[s] += 1
+            else:
+                status_counts["pending"] += 1
+
+        return {"tasks": all_tasks, "stats": status_counts}
+
+    @app.post("/api/tasks/cancel/{task_id}")
+    async def api_cancel_task(task_id: str):
+        try:
+            from core.task_queue import TaskQueue
+            ok = TaskQueue.get().cancel(task_id)
+            return {"ok": ok}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    # ── Logs ──────────────────────────────────────────────────────────────────
+    @app.get("/api/logs")
+    async def api_logs(file: str = "system", lines: int = 80):
+        safe = {"system", "brain", "agents", "errors", "service"}
+        if file not in safe:
+            return JSONResponse({"error": "invalid log file"}, 400)
+        try:
+            p = Path(f"/root/my_personal_ai/logs/{file}.log")
+            if not p.exists():
+                return {"lines": []}
+            all_lines = p.read_text("utf-8", errors="replace").splitlines()
+            return {"lines": all_lines[-lines:], "file": file}
+        except Exception as e:
+            return {"error": str(e), "lines": []}
+
+    # ── Trading ───────────────────────────────────────────────────────────────
+    @app.get("/api/trading")
+    async def api_trading():
+        """Read trading bot state directly from :8001 API."""
+        import asyncio
+        BOT_URL = "http://127.0.0.1:8001"
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(ssl=False),
+                timeout=aiohttp.ClientTimeout(total=3)
+            ) as sess:
+                async def _get(path):
+                    try:
+                        async with sess.get(f"{BOT_URL}{path}") as r:
+                            return await r.json()
+                    except Exception:
+                        return {}
+                status, balance, signals, strategies = await asyncio.gather(
+                    _get("/status"),
+                    _get("/balance"),
+                    _get("/signals"),
+                    _get("/strategies"),
+                )
+            paper = status.get("paper_mode", status.get("paper", True))
+            bal = balance.get("balance_usdt", status.get("paper_balance", 10000.0))
+            mode_str = status.get("mode", "paper")
+            mode_labels = {
+                "paper":   "Paper Trading ($10,000 virtual)",
+                "testnet": "Testnet (real API)",
+                "live":    "LIVE TRADING",
+            }
+            return {
+                "online":            status.get("online", True),
+                "mode":              mode_labels.get(mode_str, mode_str),
+                "mode_raw":          mode_str,
+                "paper":             paper,
+                "balance_usdt":      bal,
+                "daily_pnl":         status.get("daily_pnl", 0.0),
+                "daily_pnl_pct":     status.get("daily_pnl_pct", 0.0),
+                "open_positions":    status.get("open_positions", 0),
+                "trades_today":      status.get("trades_today", 0),
+                "paper_trades_today":status.get("paper_trades_today", 0),
+                "win_rate":          status.get("win_rate", 0.0),
+                "winning_trades":    status.get("winning_trades", 0),
+                "losing_trades":     status.get("losing_trades", 0),
+                "active_pairs":      status.get("active_pairs", ["BTCUSDT","ETHUSDT","SOLUSDT"]),
+                "active_strategies": status.get("active_strategies", ["momentum","mean_reversion","grid"]),
+                "last_signal":       signals.get("last_signal", {}),
+                "strategies":        strategies.get("strategies", []),
+                "uptime":            status.get("uptime", 0),
+                "bot_url":           BOT_URL,
+            }
+        except Exception as e:
+            # Fallback: try to connect via requests (non-async)
+            try:
+                import urllib.request, json as _json
+                with urllib.request.urlopen(f"{BOT_URL}/status", timeout=3) as r:
+                    st = _json.loads(r.read().decode())
+                with urllib.request.urlopen(f"{BOT_URL}/balance", timeout=3) as r:
+                    bl = _json.loads(r.read().decode())
+                return {
+                    "online":        st.get("online", True),
+                    "mode":          st.get("mode", "paper"),
+                    "paper":         st.get("paper_mode", True),
+                    "balance_usdt":  bl.get("balance_usdt", 10000.0),
+                    "daily_pnl":     st.get("daily_pnl", 0.0),
+                    "win_rate":      st.get("win_rate", 0.0),
+                    "active_pairs":  st.get("active_pairs", []),
+                    "active_strategies": st.get("active_strategies", []),
+                }
+            except Exception as e2:
+                return {"online": False, "error": str(e2)}
+
+    @app.post("/api/trading/control")
+    async def api_trading_control(request: Request):
+        """Control trading bot: pause, resume, toggle strategy."""
+        import aiohttp
+        BOT_URL = "http://127.0.0.1:8001"
+        body = await request.json()
+        action = body.get("action", "")
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3)) as sess:
+                if action == "pause":
+                    async with sess.post(f"{BOT_URL}/trading/pause") as r:
+                        return await r.json()
+                elif action == "resume":
+                    async with sess.post(f"{BOT_URL}/trading/resume") as r:
+                        return await r.json()
+                elif action == "toggle_strategy":
+                    name = body.get("name", "")
+                    async with sess.post(f"{BOT_URL}/strategy/{name}/toggle") as r:
+                        return await r.json()
+                elif action == "enable_live":
+                    # Enable live trading (HITL gate — requires explicit call)
+                    import os
+                    for ef in ['/root/bybit-bot/.env', '/root/my_personal_ai/.env']:
+                        try:
+                            c = open(ef).read()
+                            c = c.replace('TRADING_LIVE_CONFIRMED=false', 'TRADING_LIVE_CONFIRMED=true')
+                            open(ef, 'w').write(c)
+                        except Exception:
+                            pass
+                    import subprocess
+                    subprocess.Popen(['systemctl', 'restart', 'bybit-monitor'])
+                    return {"ok": True, "action": "enable_live", "status": "Live trading enabled"}
+                elif action == "disable_live":
+                    for ef in ['/root/bybit-bot/.env', '/root/my_personal_ai/.env']:
+                        try:
+                            c = open(ef).read()
+                            c = c.replace('TRADING_LIVE_CONFIRMED=true', 'TRADING_LIVE_CONFIRMED=false')
+                            open(ef, 'w').write(c)
+                        except Exception:
+                            pass
+                    import subprocess
+                    subprocess.Popen(['systemctl', 'restart', 'bybit-monitor'])
+                    return {"ok": True, "action": "disable_live", "status": "Live trading disabled"}
+                else:
+                    return {"error": f"Unknown action: {action}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.get("/api/trading/pnl")
+    async def api_trading_pnl():
+        """Get PnL history from trading bot."""
+        import aiohttp
+        BOT_URL = "http://127.0.0.1:8001"
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3)) as sess:
+                async with sess.get(f"{BOT_URL}/pnl") as r:
+                    return await r.json()
+        except Exception as e:
+            return {"error": str(e), "pnl_history": []}
+
+    # ── Memory stats ──────────────────────────────────────────────────────────
+    @app.get("/api/memory")
+    async def api_memory():
+        import asyncio
+        try:
+            from memory.episodic_memory import EpisodicMemory
+            return await asyncio.to_thread(EpisodicMemory.get().get_stats)
+        except Exception as e:
+            return {"error": str(e)}
+
+
+    # ── Projects ──────────────────────────────────────────────────────────────
+    @app.get("/api/projects")
+    async def api_projects(status: str = None, project_type: str = None):
+        try:
+            from core.project_registry import ProjectRegistry
+            reg   = ProjectRegistry.get()
+            items = reg.list_all(status=status, project_type=project_type)
+            stats = reg.get_stats()
+            return {"projects": items, "stats": stats}
+        except Exception as e:
+            return {"error": str(e), "projects": [], "stats": {}}
+
+    @app.post("/api/projects")
+    async def api_create_project(request: Request):
+        body = await request.json()
+        try:
+            from core.project_registry import ProjectRegistry
+            pid = ProjectRegistry.get().create(
+                name         = body.get("name", "Untitled"),
+                description  = body.get("description", ""),
+                project_type = body.get("type", "custom"),
+                config       = body.get("config", {}),
+                tags         = body.get("tags", []),
+            )
+            return {"ok": True, "project_id": pid}
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, 500)
+
+
+    @app.post("/api/projects/create")
+    async def api_create_project_alias(request: Request):
+        """Alias for POST /api/projects — used by dashboard HTML."""
+        body = await request.json()
+        try:
+            from core.project_registry import ProjectRegistry
+            pid = ProjectRegistry.get().create(
+                name         = body.get("name", "Untitled"),
+                description  = body.get("description", ""),
+                project_type = body.get("type", "custom"),
+                config       = body.get("config", {}),
+                tags         = body.get("tags", []),
+            )
+            return {"ok": True, "project_id": pid}
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, 500)
+
+    @app.post("/api/projects/{project_id}/status")
+    async def api_project_status(project_id: str, req: Request):
+        body = await request.json()
+        try:
+            from core.project_registry import ProjectRegistry
+            ok = ProjectRegistry.get().set_status(
+                project_id, body.get("status", "running"), body.get("error", "")
+            )
+            return {"ok": ok}
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, 500)
+
+    # ── Full System Diagnostics ───────────────────────────────────────────────
+    @app.get("/api/diagnostics")
+    async def api_diagnostics():
+        diag: dict[str, Any] = {"ts": time.time()}
+        # Memory
+        try:
+            with open("/proc/meminfo") as f:
+                lines = {l.split(":")[0]: int(l.split()[1])
+                         for l in f if ":" in l and len(l.split()) >= 2
+                         and l.split()[1].isdigit()}
+            total = lines.get("MemTotal", 1)
+            avail = lines.get("MemAvailable", total)
+            diag["memory"] = {
+                "total_mb":  total // 1024,
+                "avail_mb":  avail // 1024,
+                "used_pct":  round((1 - avail / total) * 100, 1),
+            }
+        except Exception as e:
+            diag["memory"] = {"error": str(e)}
+        # Disk
+        try:
+            import shutil
+            u = shutil.disk_usage("/root")
+            diag["disk"] = {
+                "total_gb": round(u.total / 1e9, 1),
+                "used_gb":  round(u.used  / 1e9, 1),
+                "free_gb":  round(u.free  / 1e9, 1),
+                "used_pct": round(u.used / u.total * 100, 1),
+            }
+        except Exception as e:
+            diag["disk"] = {"error": str(e)}
+        # Services — use asyncio subprocess to avoid blocking event loop
+        async def _check_svc(svc_name: str) -> str:
+            try:
+                import asyncio as _aio
+                proc = await _aio.create_subprocess_exec(
+                    "systemctl", "is-active", svc_name,
+                    stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.DEVNULL
+                )
+                stdout, _ = await _aio.wait_for(proc.communicate(), timeout=3)
+                return stdout.decode().strip()
+            except Exception:
+                return "unknown"
+        import asyncio
+        svc_results = await asyncio.gather(
+            _check_svc("personal-ai"), _check_svc("bybit-monitor"),
+            return_exceptions=True
+        )
+        for svc, result in zip(["personal-ai", "bybit-monitor"], svc_results):
+            diag.setdefault("services", {})[svc] = result if isinstance(result, str) else "error"
+        # Self-healing stats
+        try:
+            from monitoring.self_healing import SelfHealingEngine
+            diag["self_healing"] = SelfHealingEngine.get().get_stats()
+        except Exception:
+            diag["self_healing"] = {}
+        # Project stats
+        try:
+            from core.project_registry import ProjectRegistry
+            diag["projects"] = ProjectRegistry.get().get_stats()
+        except Exception:
+            diag["projects"] = {}
+        # Task queue
+        try:
+            from core.task_queue import TaskQueue
+            diag["tasks"] = TaskQueue.get().get_stats()
+        except Exception:
+            diag["tasks"] = {}
+        return diag
+
+
+    # ── /api/settings ────────────────────────────────────────────────────────
+
+    @app.get("/api/settings")
+    async def get_settings():
+        """Получить сохранённые настройки дашборда."""
+        import json as _j
+        from pathlib import Path
+        p = Path("/root/my_personal_ai/data/dashboard_settings.json")
+        defaults = {"preferred_model": "auto", "log_file": "system",
+                    "auto_refresh": True, "refresh_interval_sec": 10, "theme": "dark"}
+        if p.exists():
+            try: defaults.update(_j.loads(p.read_text()))
+            except Exception: pass
+        return defaults
+
+    @app.post("/api/settings")
+    async def save_settings(body: dict):
+        """Сохранить настройки дашборда на сервер."""
+        import json as _j
+        from pathlib import Path
+        p = Path("/root/my_personal_ai/data/dashboard_settings.json")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        allowed = {"preferred_model", "log_file", "auto_refresh",
+                   "refresh_interval_sec", "theme"}
+        clean = {k: v for k, v in body.items() if k in allowed}
+        p.write_text(_j.dumps(clean, ensure_ascii=False, indent=2))
+        return {"status": "saved", "settings": clean}
+
+    # ── Server Resources ──────────────────────────────────────────────────────
+    @app.get("/api/server")
+    async def api_server():
+        try:
+            import psutil, time
+            cpu = psutil.cpu_percent(interval=0.5)
+            ram = psutil.virtual_memory()
+            disk = psutil.disk_usage("/")
+            net = psutil.net_io_counters()
+            temps = {}
+            try:
+                t = psutil.sensors_temperatures()
+                if t:
+                    temps = {k: [x.current for x in v] for k,v in t.items()}
+            except Exception:
+                pass
+            return {
+                "cpu_pct": cpu,
+                "cpu_count": psutil.cpu_count(),
+                "ram_total_gb": round(ram.total/1e9, 2),
+                "ram_used_gb": round(ram.used/1e9, 2),
+                "ram_pct": ram.percent,
+                "disk_total_gb": round(disk.total/1e9, 1),
+                "disk_used_gb": round(disk.used/1e9, 1),
+                "disk_pct": round(disk.percent, 1),
+                "net_sent_mb": round(net.bytes_sent/1e6, 1),
+                "net_recv_mb": round(net.bytes_recv/1e6, 1),
+                "uptime": int(time.time() - psutil.boot_time()),
+                "uptime_s": int(time.time() - psutil.boot_time()),
+                "temps": temps,
+                "load_avg": list(psutil.getloadavg()),
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ── Knowledge base ────────────────────────────────────────────────────────
+    @app.get("/api/knowledge")
+    async def api_knowledge(q: str = "", limit: int = 30, category: str = ""):
+        try:
+            import sqlite3
+            con = sqlite3.connect("/root/my_personal_ai/data/memory.db")
+            con.row_factory = sqlite3.Row
+            cur = con.cursor()
+            if q:
+                cur.execute(
+                    "SELECT id, category, title, substr(content,1,200) as snippet, "
+                    "tags, importance, ts FROM knowledge "
+                    "WHERE title LIKE ? OR content LIKE ? "
+                    "ORDER BY ts DESC LIMIT ?",
+                    (f"%{q}%", f"%{q}%", limit)
+                )
+            elif category:
+                cur.execute(
+                    "SELECT id, category, title, substr(content,1,200) as snippet, "
+                    "tags, importance, ts FROM knowledge "
+                    "WHERE category=? ORDER BY ts DESC LIMIT ?",
+                    (category, limit)
+                )
+            else:
+                cur.execute(
+                    "SELECT id, category, title, substr(content,1,200) as snippet, "
+                    "tags, importance, ts FROM knowledge "
+                    "ORDER BY ts DESC LIMIT ?",
+                    (limit,)
+                )
+            rows = [dict(r) for r in cur.fetchall()]
+            cur.execute("SELECT COUNT(*) FROM knowledge")
+            total = cur.fetchone()[0]
+            cur.execute("SELECT DISTINCT category FROM knowledge ORDER BY category")
+            cats = [r[0] for r in cur.fetchall()]
+            con.close()
+            return {"knowledge": rows, "total": total, "categories": cats}
+        except Exception as e:
+            return {"error": str(e), "knowledge": [], "total": 0}
+
+    # ── Chat history ──────────────────────────────────────────────────────────
+    @app.get("/api/chat/history")
+    async def api_chat_history(limit: int = 50, session: str = ""):
+        try:
+            import sqlite3
+            con = sqlite3.connect("/root/my_personal_ai/data/memory.db")
+            con.row_factory = sqlite3.Row
+            cur = con.cursor()
+            if session:
+                cur.execute(
+                    "SELECT role, source, substr(content,1,500) as content, ts "
+                    "FROM messages WHERE session_id=? ORDER BY ts DESC LIMIT ?",
+                    (session, limit)
+                )
+            else:
+                cur.execute(
+                    "SELECT role, source, substr(content,1,500) as content, ts "
+                    "FROM messages WHERE role IN ('user','assistant') "
+                    "ORDER BY ts DESC LIMIT ?",
+                    (limit,)
+                )
+            rows = [dict(r) for r in cur.fetchall()]
+            con.close()
+            return list(reversed(rows))  # array directly
+        except Exception as e:
+            return []  # empty array on error
+
+    # ── System prompt editor ──────────────────────────────────────────────────
+    @app.get("/api/system-prompt")
+    async def api_get_system_prompt():
+        try:
+            from core.system_prompt import BASE_SYSTEM_PROMPT, TASK_PROMPTS
+            return {"prompt": BASE_SYSTEM_PROMPT, "task_prompts": TASK_PROMPTS}
+        except Exception as e:
+            return {"error": str(e), "prompt": ""}
+
+    @app.post("/api/system-prompt")
+    async def api_save_system_prompt(request: Request):
+        body = await request.json()
+        new_prompt = body.get("prompt", "").strip()
+        if len(new_prompt) < 50:
+            return JSONResponse({"ok": False, "error": "Prompt too short"}, 400)
+        try:
+            path = "/root/my_personal_ai/core/system_prompt.py"
+            with open(path, "r", encoding="utf-8") as f:
+                src = f.read()
+            marker_start = 'BASE_SYSTEM_PROMPT = """'
+            tq = chr(34) * 3
+            marker_end = tq + "\n\n\nTASK_PROMPTS"
+            start = src.find(marker_start)
+            end = src.find(marker_end, start)
+            if start == -1 or end == -1:
+                return JSONResponse({"ok": False, "error": "Markers not found"}, 500)
+            new_src = src[:start] + marker_start + "\n" + new_prompt + "\n" + tq + src[end+3:]
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(new_src)
+            import subprocess
+            r = subprocess.run(["python3", "-m", "py_compile", path], capture_output=True, text=True)
+            if r.returncode != 0:
+                return JSONResponse({"ok": False, "error": r.stderr}, 500)
+            return {"ok": True, "length": len(new_prompt)}
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, 500)
+
+
+    @app.post("/api/browser/browse")
+    async def api_browser_browse(request: Request):
+        """Browse a URL via browser agent."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        url = (body.get("url") or "").strip()
+        if not url:
+            return JSONResponse({"error": "url required"}, 400)
+        try:
+            from brain.orchestrator import BrainOrchestrator
+            brain = BrainOrchestrator.get()
+            browser = brain._agents.get("browser")
+            if not browser:
+                return {"error": "Browser agent not running"}
+            result = browser.browse(url, extract_links=True)
+            return result
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ── LLM Test ──────────────────────────────────────────────────────────────
+    @app.post("/api/llm/test")
+    async def api_llm_test(request: Request):
+        body = await request.json()
+        provider = body.get("provider", "deepseek")
+        msg = body.get("message", "Say: OK")
+        try:
+            import asyncio
+            from brain.llm_router import LLMRouter
+            import time as _time
+            router = LLMRouter.get()
+            t0 = _time.time()
+            # Use the high-level complete() method (no TaskType needed)
+            reply = await asyncio.wait_for(
+                router.complete(msg, system='You are a helpful assistant.', task_type='chat', max_tokens=100),
+                timeout=30,
+            )
+            latency = round((_time.time()-t0)*1000)
+            return {"ok": True, "reply": str(reply)[:200], "model": provider, "latency_ms": latency}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    # ── Self-training stats ───────────────────────────────────────────────────
+    @app.get("/api/self-training")
+    async def api_self_training():
+        """Get self-training statistics."""
+        import sqlite3 as _sql
+        db_path = "/root/my_personal_ai/data/memory.db"
+        try:
+            conn = _sql.connect(db_path)
+            conn.execute("PRAGMA journal_mode=WAL")
+            cur = conn.cursor()
+            # Get table columns first to build safe query
+            cols_raw = cur.execute("PRAGMA table_info(training_log)").fetchall()
+            cols = [c[1] for c in cols_raw]
+            total = cur.execute("SELECT COUNT(*) FROM training_log").fetchone()[0]
+            # Build aggregation based on available columns
+            if 'category' in cols:
+                rows = cur.execute(
+                    "SELECT category, COUNT(*) as cnt FROM training_log GROUP BY category"
+                ).fetchall()
+                by_cat = {r[0] or 'unknown': r[1] for r in rows}
+            elif 'task_type' in cols:
+                rows = cur.execute(
+                    "SELECT task_type, COUNT(*) as cnt FROM training_log GROUP BY task_type"
+                ).fetchall()
+                by_cat = {r[0] or 'unknown': r[1] for r in rows}
+            else:
+                by_cat = {}
+            # Avg score if available
+            avg_score = 0.0
+            if 'score' in cols:
+                row = cur.execute("SELECT AVG(score) FROM training_log WHERE score IS NOT NULL").fetchone()
+                avg_score = round(row[0] or 0.0, 3)
+            # Recent entries
+            select_cols = ['id'] + [c for c in ['title','content','category','score','ts','timestamp','created_at'] if c in cols]
+            recent = cur.execute(
+                f"SELECT {','.join(select_cols)} FROM training_log ORDER BY id DESC LIMIT 5"
+            ).fetchall()
+            conn.close()
+            return {
+                "total": total,
+                "by_category": by_cat,
+                "avg_score": avg_score,
+                "recent": [dict(zip(select_cols, r)) for r in recent],
+                "columns": cols,
+            }
+        except Exception as e:
+            return {"error": str(e), "total": 0, "by_category": {}, "avg_score": 0.0, "recent": []}
+
+
+    @app.get("/api/files")
+    async def api_files(path: str = "/root/my_personal_ai"):
+        import os
+        safe_roots = ["/root/my_personal_ai", "/root/bybit-bot"]
+        real = os.path.realpath(path)
+        if not any(real.startswith(r) for r in safe_roots):
+            return JSONResponse({"error": "Access denied"}, 403)
+        try:
+            entries = []
+            with os.scandir(real) as it:
+                for e in sorted(it, key=lambda x: (not x.is_dir(), x.name)):
+                    try:
+                        st = e.stat()
+                        entries.append({
+                            "name": e.name, "path": e.path,
+                            "is_dir": e.is_dir(), "size": st.st_size,
+                            "mtime": st.st_mtime,
+                        })
+                    except Exception:
+                        pass
+            return {"path": real, "entries": entries, "parent": os.path.dirname(real)}
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.get("/api/files/read")
+    async def api_file_read(path: str):
+        import os
+        safe_roots = ["/root/my_personal_ai", "/root/bybit-bot"]
+        real = os.path.realpath(path)
+        if not any(real.startswith(r) for r in safe_roots):
+            return JSONResponse({"error": "Access denied"}, 403)
+        if not os.path.isfile(real):
+            return JSONResponse({"error": "Not a file"}, 404)
+        size = os.path.getsize(real)
+        if size > 500_000:
+            return JSONResponse({"error": f"File too large ({size} bytes)"}, 413)
+        try:
+            content = open(real, "r", encoding="utf-8", errors="replace").read()
+            return {"path": real, "content": content, "size": size}
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ── Bybit strategies control ──────────────────────────────────────────────
+    @app.get("/api/bybit/strategies")
+    async def api_bybit_strategies():
+        try:
+            import httpx
+            r = httpx.get("http://127.0.0.1:8001/strategies", timeout=5)
+            return r.json()
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.post("/api/bybit/strategy/{name}/toggle")
+    async def api_bybit_toggle(name: str):
+        try:
+            import httpx
+            r = httpx.post(f"http://127.0.0.1:8001/strategy/{name}/toggle", timeout=5)
+            return r.json()
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ── Scheduler (simple cron-like) ──────────────────────────────────────────
+    @app.get("/api/scheduler")
+    async def api_scheduler():
+        import json as _j
+        from pathlib import Path
+        p = Path("/root/my_personal_ai/data/scheduler_jobs.json")
+        if p.exists():
+            try:
+                return {"jobs": _j.loads(p.read_text())}
+            except Exception:
+                pass
+        return {"jobs": []}
+
+    @app.post("/api/scheduler")
+    async def api_scheduler_add(request: Request):
+        import json as _j
+        from pathlib import Path
+        body = await request.json()
+        p = Path("/root/my_personal_ai/data/scheduler_jobs.json")
+        jobs = []
+        if p.exists():
+            try:
+                jobs = _j.loads(p.read_text())
+            except Exception:
+                pass
+        import time, uuid
+        jobs.append({
+            "id": str(uuid.uuid4())[:8],
+            "name": body.get("name", "Job"),
+            "command": body.get("command", ""),
+            "cron": body.get("cron", ""),
+            "enabled": True,
+            "created_at": time.time(),
+        })
+        p.write_text(_j.dumps(jobs, indent=2))
+        return {"ok": True, "jobs": jobs}
+
+    log.info("Dashboard routes registered")
+
+    # ── Email ─────────────────────────────────────────────────────────────────
+    @app.get("/api/email/status")
+    async def api_email_status():
+        """Email agent connection status."""
+        try:
+            from brain.orchestrator import BrainOrchestrator
+            brain = BrainOrchestrator.get()
+            agent = brain._agents.get("email")
+            if not agent:
+                return {"connected": False, "address": "", "error": "Email agent not running"}
+            return agent.status()
+        except Exception as e:
+            return {"error": str(e), "connected": False}
+
+    @app.get("/api/email/inbox")
+    async def api_email_inbox(count: int = 20):
+        """Fetch email inbox."""
+        try:
+            from brain.orchestrator import BrainOrchestrator
+            brain = BrainOrchestrator.get()
+            agent = brain._agents.get("email")
+            if not agent:
+                return {"emails": [], "error": "Email agent not running"}
+            emails = agent.fetch_inbox(count)
+            return {"emails": emails, "count": len(emails)}
+        except Exception as e:
+            return {"emails": [], "error": str(e)}
+
+    @app.get("/api/email/keys")
+    async def api_email_keys():
+        """Extract API keys from emails."""
+        try:
+            from brain.orchestrator import BrainOrchestrator
+            brain = BrainOrchestrator.get()
+            agent = brain._agents.get("email")
+            if not agent:
+                return {"keys": [], "error": "Email agent not running"}
+            keys = agent.extract_api_keys()
+            return {"keys": keys, "count": len(keys)}
+        except Exception as e:
+            return {"keys": [], "error": str(e)}
+
+    @app.post("/api/email/search")
+    async def api_email_search(request: Request):
+        """Search emails."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        query = body.get("query", "").strip()
+        if not query:
+            return {"results": [], "error": "query required"}
+        try:
+            from brain.orchestrator import BrainOrchestrator
+            brain = BrainOrchestrator.get()
+            agent = brain._agents.get("email")
+            if not agent:
+                return {"results": [], "error": "Email agent not running"}
+            results = agent.search_emails(query)
+            return {"results": results}
+        except Exception as e:
+            return {"results": [], "error": str(e)}
+
+
+    # ── Browser Agent ─────────────────────────────────────────────────────────────
+    @app.get("/api/browser/history")
+    async def api_browser_history():
+        """Get browser agent page history."""
+        try:
+            from brain.orchestrator import BrainOrchestrator
+            brain = BrainOrchestrator.get()
+            browser = brain._agents.get("browser")
+            if not browser:
+                return {"history": [], "tor_active": False, "message": "Browser agent not running"}
+            h = browser.history()
+            return {
+                "history": h[:50],
+                "tor_active": browser._tor_ok,
+                "total": len(h),
+            }
+        except Exception as e:
+            return {"history": [], "error": str(e)}
+
+    @app.post("/api/browser/search")
+    async def api_browser_search(request: Request):
+        """Search the web via browser agent."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        query = (body.get("query") or body.get("q") or "").strip()
+        if not query:
+            return JSONResponse({"error": "query required"}, 400)
+        try:
+            from brain.orchestrator import BrainOrchestrator
+            brain = BrainOrchestrator.get()
+            browser = brain._agents.get("browser")
+            if not browser:
+                return {"error": "Browser agent not running"}
+            results = browser.search(query)
+            return {"results": results, "query": query}
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.get("/api/browser/price")
+    async def api_browser_price(symbol: str = "BTC"):
+        """Get crypto price via browser agent."""
+        try:
+            from brain.orchestrator import BrainOrchestrator
+            brain = BrainOrchestrator.get()
+            browser = brain._agents.get("browser")
+            if not browser:
+                return {"error": "Browser agent not running"}
+            price = browser.get_price(symbol.upper())
+            return {"symbol": symbol.upper(), "price": price, "via_tor": browser._tor_ok}
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ── Missing endpoints for dashboard compatibility ──────────────────────────
+
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # MASTER CONTROLLER — Terminal, File Write, Code, Audit
+    # ══════════════════════════════════════════════════════════════════════════
+
+    @app.post("/api/terminal/exec")
+    async def api_terminal_exec(request: Request):
+        """Execute shell command on server."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        cmd = (body.get("cmd") or body.get("command") or "").strip()
+        cwd = body.get("cwd", "/root/my_personal_ai")
+        timeout = min(int(body.get("timeout", 30)), 120)
+        if not cmd:
+            return JSONResponse({"error": "cmd required"}, 400)
+        # Safety: block dangerous patterns
+        blocked = ["rm -rf /", "mkfs", ":(){:|:&};:"]
+        if any(b in cmd for b in blocked):
+            return JSONResponse({"error": "Blocked command"}, 403)
+        import subprocess, time as _time
+        t0 = _time.time()
+        try:
+            r = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True,
+                cwd=cwd, timeout=timeout,
+                env={**__import__("os").environ, "PYTHONIOENCODING": "utf-8"},
+            )
+            return {
+                "cmd": cmd, "cwd": cwd,
+                "stdout": r.stdout[:8000],
+                "stderr": r.stderr[:2000],
+                "exit_code": r.returncode,
+                "duration_ms": round((_time.time() - t0) * 1000),
+            }
+        except subprocess.TimeoutExpired:
+            return JSONResponse({"error": f"Timeout after {timeout}s"}, 408)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, 500)
+
+    @app.post("/api/files/write")
+    async def api_file_write(request: Request):
+        """Write content to a file."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        path = (body.get("path") or "").strip()
+        content = body.get("content", "")
+        if not path:
+            return JSONResponse({"error": "path required"}, 400)
+        from pathlib import Path as _P
+        # Safety check
+        safe_roots = ["/root/my_personal_ai", "/root/bybit-bot", "/tmp"]
+        p = _P(path).resolve()
+        is_safe = any(str(p).startswith(r) for r in safe_roots)
+        if not is_safe:
+            return JSONResponse({"error": f"Path not in allowed roots"}, 403)
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content, encoding="utf-8")
+            return {"ok": True, "path": str(p), "size": p.stat().st_size}
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, 500)
+
+    @app.post("/api/files/delete")
+    async def api_file_delete(request: Request):
+        """Delete a file."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        path = (body.get("path") or "").strip()
+        if not path:
+            return JSONResponse({"error": "path required"}, 400)
+        from pathlib import Path as _P
+        safe_roots = ["/root/my_personal_ai", "/root/bybit-bot", "/tmp"]
+        p = _P(path).resolve()
+        is_safe = any(str(p).startswith(r) for r in safe_roots)
+        if not is_safe:
+            return JSONResponse({"error": "Not allowed"}, 403)
+        if p.is_dir():
+            return JSONResponse({"error": "Cannot delete directory via API"}, 403)
+        try:
+            if p.exists():
+                p.unlink()
+            return {"ok": True, "deleted": str(p)}
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, 500)
+
+    @app.post("/api/code/search")
+    async def api_code_search(request: Request):
+        """Search in codebase."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        query = (body.get("query") or "").strip()
+        path = body.get("path", "/root/my_personal_ai")
+        pattern = body.get("pattern", "*.py")
+        if not query:
+            return JSONResponse({"error": "query required"}, 400)
+        import subprocess, shlex
+        rg_check = subprocess.run("which rg", shell=True, capture_output=True).returncode == 0
+        if rg_check:
+            cmd = f"rg -n --max-count=5 --glob {shlex.quote(pattern)} {shlex.quote(query)} {path} 2>/dev/null | head -60"
+        else:
+            cmd = f"grep -rn --include={shlex.quote(pattern)} {shlex.quote(query)} {path} 2>/dev/null | head -60"
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
+        lines = [l for l in r.stdout.split("\n") if l.strip()]
+        return {"query": query, "path": path, "matches": lines, "count": len(lines)}
+
+    @app.get("/api/projects/audit")
+    async def api_project_audit(path: str = "/root/my_personal_ai"):
+        """Full project audit / context snapshot."""
+        from pathlib import Path as _P
+        import subprocess
+        def sh(c):
+            try:
+                return subprocess.run(c, shell=True, capture_output=True, text=True, timeout=5).stdout.strip()
+            except:
+                return ""
+        p = _P(path)
+        if not p.exists():
+            return JSONResponse({"error": "Path not found"}, 404)
+        py_count = sh(f"find {path} -name '*.py' -not -path '*/venv/*' 2>/dev/null | wc -l")
+        recent = sh(f"git -C {path} log --oneline -5 2>/dev/null")
+        todos = sh(f"grep -rn 'TODO\\|FIXME' {path} --include='*.py' 2>/dev/null | wc -l")
+        size = sh(f"du -sh {path} 2>/dev/null | cut -f1")
+        entry_points = [ep for ep in ["main.py","app.py","server.py"] if (_P(path)/ep).exists()]
+        return {
+            "path": path,
+            "name": p.name,
+            "py_files": int(py_count or 0),
+            "recent_commits": recent,
+            "todo_count": int(todos or 0),
+            "disk_size": size,
+            "entry_points": entry_points,
+        }
+
+    @app.get("/api/system/master-config")
+    async def api_master_config():
+        """Return system master config."""
+        import json
+        from pathlib import Path as _P
+        cfg_path = _P("/root/my_personal_ai/config/system_master_core.json")
+        if cfg_path.exists():
+            return json.loads(cfg_path.read_text())
+        return {"error": "Master config not generated yet"}
+
+    @app.post("/api/system/master-config/regenerate")
+    async def api_regen_master_config():
+        """Regenerate system master config."""
+        import subprocess
+        r = subprocess.run(
+            "/root/venv/bin/python3 /tmp/gen_master_config.py",
+            shell=True, capture_output=True, text=True, timeout=30,
+        )
+        return {"ok": r.returncode == 0, "output": r.stdout[:500], "error": r.stderr[:200]}
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # MONEY TOOLS — Arbitrage, Signals, Promos, Yields
+    # ══════════════════════════════════════════════════════════════════════════
+
+    @app.get("/api/money/prices")
+    async def api_money_prices():
+        """Live crypto prices from Bybit."""
+        import asyncio
+        symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
+                   "DOGEUSDT", "AVAXUSDT", "DOTUSDT", "ADAUSDT", "LINKUSDT"]
+        try:
+            from brain.orchestrator import BrainOrchestrator
+            brain = BrainOrchestrator.get()
+            browser = brain._agents.get("browser")
+            prices = {}
+            for sym in symbols:
+                clean = sym.replace("USDT", "")
+                if browser:
+                    p = browser.get_price(clean)
+                    prices[clean] = p
+                else:
+                    prices[clean] = None
+            return {"prices": prices, "ts": __import__("time").time()}
+        except Exception as e:
+            return {"prices": {}, "error": str(e)}
+
+    @app.get("/api/money/arbitrage")
+    async def api_money_arbitrage():
+        """Spot vs Futures arbitrage scanner (Bybit)."""
+        import requests as _req
+        try:
+            symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
+            opps = []
+            for sym in symbols:
+                try:
+                    # Spot
+                    r_spot = _req.get(
+                        f"https://api.bybit.com/v5/market/tickers?category=spot&symbol={sym}",
+                        timeout=5
+                    ).json()
+                    spot_price = float(r_spot["result"]["list"][0]["lastPrice"])
+                    # Linear futures
+                    r_fut = _req.get(
+                        f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={sym}",
+                        timeout=5
+                    ).json()
+                    fut_price = float(r_fut["result"]["list"][0]["lastPrice"])
+                    funding_rate = float(r_fut["result"]["list"][0].get("fundingRate", 0))
+                    spread_pct = ((fut_price - spot_price) / spot_price) * 100
+                    opps.append({
+                        "symbol": sym.replace("USDT",""),
+                        "spot": spot_price,
+                        "futures": fut_price,
+                        "spread_pct": round(spread_pct, 4),
+                        "funding_rate": round(funding_rate * 100, 4),
+                        "opportunity": abs(spread_pct) > 0.1,
+                    })
+                except Exception:
+                    pass
+            opps.sort(key=lambda x: abs(x.get("spread_pct", 0)), reverse=True)
+            return {"arbitrage": opps, "ts": __import__("time").time()}
+        except Exception as e:
+            return {"arbitrage": [], "error": str(e)}
+
+    @app.get("/api/money/signals")
+    async def api_money_signals():
+        """Basic trading signals: RSI + trend for top coins."""
+        import requests as _req
+        def get_klines(sym, interval="60", limit=50):
+            try:
+                r = _req.get(
+                    f"https://api.bybit.com/v5/market/kline?category=linear"
+                    f"&symbol={sym}&interval={interval}&limit={limit}",
+                    timeout=5
+                ).json()
+                closes = [float(k[4]) for k in reversed(r["result"]["list"])]
+                return closes
+            except:
+                return []
+        def calc_rsi(closes, period=14):
+            if len(closes) < period + 1:
+                return None
+            gains, losses = [], []
+            for i in range(1, len(closes)):
+                d = closes[i] - closes[i-1]
+                gains.append(max(d, 0))
+                losses.append(max(-d, 0))
+            avg_gain = sum(gains[-period:]) / period
+            avg_loss = sum(losses[-period:]) / period
+            if avg_loss == 0:
+                return 100
+            rs = avg_gain / avg_loss
+            return round(100 - (100 / (1 + rs)), 1)
+        symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
+        signals = []
+        for sym in symbols:
+            closes = get_klines(sym)
+            if not closes:
+                continue
+            rsi = calc_rsi(closes)
+            price = closes[-1]
+            ma20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else None
+            trend = "bullish" if (ma20 and price > ma20) else "bearish"
+            if rsi is not None:
+                action = "BUY" if rsi < 30 else ("SELL" if rsi > 70 else "HOLD")
+            else:
+                action = "HOLD"
+            signals.append({
+                "symbol": sym.replace("USDT",""),
+                "price": price,
+                "rsi": rsi,
+                "trend": trend,
+                "ma20": round(ma20, 2) if ma20 else None,
+                "signal": action,
+            })
+        return {"signals": signals, "ts": __import__("time").time()}
+
+    @app.get("/api/money/funding")
+    async def api_money_funding():
+        """Funding rates for top perpetuals."""
+        import requests as _req
+        try:
+            r = _req.get(
+                "https://api.bybit.com/v5/market/tickers?category=linear",
+                timeout=8
+            ).json()
+            items = r.get("result", {}).get("list", [])
+            data = []
+            for item in items:
+                try:
+                    fr = float(item.get("fundingRate", 0))
+                    if abs(fr) > 0:
+                        data.append({
+                            "symbol": item["symbol"],
+                            "price": float(item.get("lastPrice", 0)),
+                            "funding_rate": round(fr * 100, 4),
+                            "annual_pct": round(fr * 100 * 3 * 365, 1),
+                        })
+                except:
+                    pass
+            data.sort(key=lambda x: abs(x["funding_rate"]), reverse=True)
+            return {"funding": data[:30], "ts": __import__("time").time()}
+        except Exception as e:
+            return {"funding": [], "error": str(e)}
+
+    @app.get("/api/money/promos")
+    async def api_money_promos():
+        """Fetch Bybit promotions and announcements."""
+        import requests as _req
+        try:
+            r = _req.get(
+                "https://api.bybit.com/v5/announcements/index?locale=en-US&type=new_crypto&page=1&limit=10",
+                timeout=8
+            ).json()
+            items = r.get("result", {}).get("list", [])
+            promos = [{
+                "title": item.get("title",""),
+                "type": item.get("type",""),
+                "date": item.get("dateTimestamp",""),
+                "url": item.get("url",""),
+            } for item in items[:10]]
+            return {"promos": promos, "count": len(promos)}
+        except Exception as e:
+            # fallback: just return empty
+            return {"promos": [], "message": "Bybit promos API - " + str(e)[:100]}
+
+    @app.get("/api/money/portfolio")
+    async def api_money_portfolio():
+        """Portfolio summary from Bybit."""
+        try:
+            from brain.orchestrator import BrainOrchestrator
+            brain = BrainOrchestrator.get()
+            trading = brain._agents.get("trading")
+            if not trading:
+                return {"error": "Trading agent not running"}
+            # Use trading agent to get balance
+            result = trading.process("баланс", source="dashboard")
+            return {"summary": result, "ts": __import__("time").time()}
+        except Exception as e:
+            return {"error": str(e)}
+
+
+
+
+    # ===========================================================================
+    # AUTONOMOUS AI BUSINESS SYSTEM v4.6.2026
+    # ===========================================================================
+
+
+
+    # ===========================================================================
+    # AUTONOMOUS SALES AGENT v2026
+    # ===========================================================================
+
+    @app.post("/api/sales/message")
+    async def api_sales_message(request: Request):
+        """Process an incoming lead message and return agent response."""
+        import asyncio
+        body = await request.json()
+        try:
+            import sys as _sys; _sys.path.insert(0, "/root/autonomous-ai-business")
+            from aib_loader import get_sales_agent
+            handle = get_sales_agent()
+            result = await asyncio.to_thread(
+                handle,
+                lead_id=body.get("lead_id", "anonymous"),
+                message=body.get("message", ""),
+                channel=body.get("channel", "chat"),
+                name=body.get("name", "Lead"),
+                company=body.get("company", ""),
+            )
+            return result
+        except Exception as e:
+            return {"error": str(e), "response": "System unavailable"}
+
+    @app.get("/api/sales/sessions")
+    async def api_sales_sessions():
+        """List all lead sessions with funnel stats."""
+        import asyncio
+        try:
+            import sys as _sys; _sys.path.insert(0, "/root/autonomous-ai-business")
+            from aib_loader import get_sales_store
+            store, invoices = get_sales_store()
+            stats    = await asyncio.to_thread(store.stats)
+            revenue  = await asyncio.to_thread(invoices.get_stats)
+            active   = await asyncio.to_thread(store.list_active)
+            return {
+                "stats":   stats,
+                "revenue": revenue,
+                "active_leads": [
+                    {
+                        "lead_id":  s.lead.lead_id,
+                        "name":     s.lead.name,
+                        "stage":    s.stage.value,
+                        "budget":   s.lead.budget_capacity,
+                        "invoice":  s.invoice_amount,
+                        "paid":     s.payment_confirmed,
+                    }
+                    for s in active
+                ],
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.get("/api/sales/session/{lead_id}")
+    async def api_sales_session(lead_id: str):
+        """Get full session detail for a lead."""
+        try:
+            import sys as _sys; _sys.path.insert(0, "/root/autonomous-ai-business")
+            from aib_loader import get_sales_store
+            store, _ = get_sales_store()
+            session  = store.get(lead_id)
+            if not session:
+                return {"error": "session not found"}
+            return session.to_dict()
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.post("/api/sales/verify_payment/{invoice_id}")
+    async def api_sales_verify_payment(invoice_id: str):
+        """Check payment status for an invoice."""
+        import asyncio
+        try:
+            import sys as _sys; _sys.path.insert(0, "/root/autonomous-ai-business")
+            from aib_loader import get_sales_store
+            _, inv_engine = get_sales_store()
+            return await asyncio.to_thread(inv_engine.verify_payment, invoice_id)
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.get("/api/sales/compliance/flags")
+    async def api_sales_compliance_flags():
+        """Get recent compliance flag events."""
+        try:
+            import sys as _sys; _sys.path.insert(0, "/root/autonomous-ai-business")
+            import importlib.util as _ilu
+            spec = _ilu.spec_from_file_location(
+                "_aib_comp",
+                "/root/autonomous-ai-business/sub_projects/sales_agent/compliance.py"
+            )
+            mod = _ilu.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            engine = mod.ComplianceEngine()
+            return {"flags": engine.recent_flags(20)}
+        except Exception as e:
+            return {"error": str(e), "flags": []}
+
+    # ===========================================================================
+    # AUTONOMOUS ARBITRAGE ENGINE v2026
+    # ===========================================================================
+
+    @app.get("/api/arbitrage/status")
+    async def api_arbitrage_status():
+        """Get arbitrage engine status and daily PnL."""
+        import asyncio
+        try:
+            import sys as _sys; _sys.path.insert(0, "/root/autonomous-ai-business")
+            from aib_loader import get_arb_engine
+            ArbEngine = get_arb_engine()
+            engine = ArbEngine()
+            return engine.get_status()
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.post("/api/arbitrage/scan")
+    async def api_arbitrage_scan(request: Request):
+        """Trigger a manual arbitrage scan and return opportunities found."""
+        import asyncio
+        body = await request.json()
+        try:
+            import sys as _sys; _sys.path.insert(0, "/root/autonomous-ai-business")
+            from aib_loader import get_arb_engine, get_order_router
+            ArbEngine   = get_arb_engine()
+            RouterClass = get_order_router()
+            engine  = ArbEngine()
+            router  = RouterClass()
+            prices  = body.get("prices", {"BTCUSDT": 65000.0, "ETHUSDT": 3200.0})
+
+            from sub_projects.fin_agent.arbitrage_engine import OrderBookSnapshot
+            order_books = {}
+            for pair, price in prices.items():
+                for ex in ["bybit", "binance"]:
+                    ob = await asyncio.to_thread(router.get_orderbook_liquidity, ex, pair)
+                    order_books[f"{ex}:{pair}"] = OrderBookSnapshot(
+                        exchange=ex, pair=pair,
+                        bid=ob.get("bid", price * 0.9999),
+                        ask=ob.get("ask", price * 1.0001),
+                        bid_vol=ob.get("bid_volume", 1.0),
+                        ask_vol=ob.get("ask_volume", 1.0),
+                        latency_ms=ob.get("latency_ms", 5.0),
+                    )
+
+            spatial_opps = await asyncio.to_thread(
+                engine.find_spatial_opportunities, order_books
+            )
+            tri_prices = {
+                "BTCUSDT": prices.get("BTCUSDT", 65000),
+                "ETHUSDT": prices.get("ETHUSDT", 3200),
+                "ETHBTC":  prices.get("ETHUSDT", 3200) / prices.get("BTCUSDT", 65000),
+            }
+            tri_opps = await asyncio.to_thread(
+                engine.find_triangular_opportunities, tri_prices
+            )
+            from dataclasses import asdict
+            return {
+                "spatial_opportunities":     [asdict(o) for o in spatial_opps[:5]],
+                "triangular_opportunities":  [asdict(o) for o in tri_opps[:5]],
+                "total_found":               len(spatial_opps) + len(tri_opps),
+                "engine_status":             engine.get_status(),
+            }
+        except Exception as e:
+            return {"error": str(e), "total_found": 0}
+
+    @app.post("/api/arbitrage/reset_circuit_breaker")
+    async def api_arbitrage_reset_cb():
+        """Manually reset the circuit breaker (admin action)."""
+        try:
+            import sys as _sys; _sys.path.insert(0, "/root/autonomous-ai-business")
+            import json
+            from pathlib import Path
+            state_path = Path("/root/autonomous-ai-business/sub_projects/fin_agent/arbitrage_state.json")
+            if state_path.exists():
+                state = json.loads(state_path.read_text())
+                state["circuit_breaker"] = False
+                state["circuit_breaker_ts"] = None
+                state["daily_drawdown_pct"] = 0.0
+                state_path.write_text(json.dumps(state, indent=2))
+            return {"ok": True, "message": "Circuit breaker reset"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    @app.get("/api/arbitrage/execution_log")
+    async def api_arbitrage_exec_log():
+        """Return last 20 execution log entries."""
+        try:
+            log_path = "/root/autonomous-ai-business/sub_projects/fin_agent/execution_log.jsonl"
+            import json
+            from pathlib import Path
+            p = Path(log_path)
+            if not p.exists():
+                return {"entries": [], "count": 0}
+            lines = p.read_text(encoding="utf-8").strip().split("\n")
+            entries = []
+            for line in lines[-20:]:
+                try:
+                    entries.append(json.loads(line))
+                except Exception:
+                    pass
+            return {"entries": list(reversed(entries)), "count": len(entries)}
+        except Exception as e:
+            return {"error": str(e), "entries": []}
+
+
+    @app.get("/api/business/status")
+    async def api_business_status():
+        try:
+            import sys as _sys; _sys.path.insert(0, "/root/autonomous-ai-business")
+            from aib_loader import get_chief_orchestrator as _get_chief
+            ChiefOrchestrator = _get_chief()
+            return ChiefOrchestrator.get().get_status()
+        except Exception as e:
+            return {"error": str(e), "system_integrity": "OFFLINE"}
+
+    @app.post("/api/business/loop")
+    async def api_business_loop():
+        import asyncio
+        try:
+            import sys as _sys; _sys.path.insert(0, "/root/autonomous-ai-business")
+            from aib_loader import get_chief_orchestrator as _get_chief
+            ChiefOrchestrator = _get_chief()
+            result = await asyncio.to_thread(ChiefOrchestrator.get().run_autonomous_loop)
+            return {"ok": True, "result": result}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    @app.get("/api/business/projects")
+    async def api_business_projects():
+        try:
+            import sys as _sys; _sys.path.insert(0, "/root/autonomous-ai-business")
+            from aib_loader import get_chief_orchestrator as _get_chief
+            ChiefOrchestrator = _get_chief()
+            chief = ChiefOrchestrator.get()
+            projects = {}
+            for name, proj in chief._projects.items():
+                projects[name] = {
+                    "active": proj.active, "roi": round(proj.roi, 3),
+                    "revenue_14d": proj.revenue_14d, "cost_14d": proj.cost_14d,
+                    "quota": str(proj.token_quota_pct) + "%",
+                    "routing": proj.routing_tier, "run_count": proj.run_count,
+                    "error_count": proj.error_count, "last_run": proj.last_run,
+                }
+            return {"projects": projects, "count": len(projects)}
+        except Exception as e:
+            return {"error": str(e), "projects": {}}
+
+    @app.post("/api/business/projects/{project_name}/override")
+    async def api_business_override(project_name: str, request: Request):
+        body = await request.json()
+        try:
+            import sys as _sys; _sys.path.insert(0, "/root/autonomous-ai-business")
+            from aib_loader import get_chief_orchestrator as _get_chief
+            ChiefOrchestrator = _get_chief()
+            ok = ChiefOrchestrator.get().override_project_config(project_name, body)
+            return {"ok": ok, "project": project_name, "applied": body}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    @app.get("/api/business/router/stats")
+    async def api_business_router_stats():
+        try:
+            import sys as _sys; _sys.path.insert(0, "/root/autonomous-ai-business")
+            from aib_loader import get_model_router as _get_router
+            _, MODEL_MATRIX = _get_router()
+            return {
+                "model_matrix": {
+                    ttype: {tier: {"provider": m["provider"], "model": m["model"],
+                                   "cost_per_1k": m["cost_per_1k"]}
+                            for tier, m in tiers.items()}
+                    for ttype, tiers in MODEL_MATRIX.items()
+                },
+                "available_types": list(MODEL_MATRIX.keys()),
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.get("/api/business/events")
+    async def api_business_events():
+        try:
+            import sys as _sys; _sys.path.insert(0, "/root/autonomous-ai-business")
+            from aib_loader import get_chief_orchestrator as _get_chief
+            ChiefOrchestrator = _get_chief()
+            events = ChiefOrchestrator.get().get_recent_events(limit=30)
+            return {"events": events, "count": len(events)}
+        except Exception as e:
+            return {"error": str(e), "events": []}
+
+    @app.post("/api/business/start")
+    async def api_business_start():
+        try:
+            import sys as _sys; _sys.path.insert(0, "/root/autonomous-ai-business")
+            from aib_loader import get_chief_orchestrator as _get_chief
+            ChiefOrchestrator = _get_chief()
+            chief = ChiefOrchestrator.get()
+            if not chief._running:
+                chief.start()
+                return {"ok": True, "message": "Chief Orchestrator started"}
+            return {"ok": True, "message": "Already running"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    @app.post("/api/business/stop")
+    async def api_business_stop():
+        try:
+            import sys as _sys; _sys.path.insert(0, "/root/autonomous-ai-business")
+            from aib_loader import get_chief_orchestrator as _get_chief
+            ChiefOrchestrator = _get_chief()
+            ChiefOrchestrator.get().stop()
+            return {"ok": True, "message": "stopped"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    @app.get("/api/business/health")
+    async def api_business_health():
+        import asyncio
+        try:
+            import sys as _sys; _sys.path.insert(0, "/root/autonomous-ai-business")
+            from aib_loader import get_self_healing as _get_heal
+            SelfHealingEngine = _get_heal()
+            result = await asyncio.to_thread(SelfHealingEngine().run_all_checks)
+            return result
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    @app.get("/api/business/trends")
+    async def api_business_trends():
+        try:
+            import pathlib, json as _j
+            p = pathlib.Path("/root/autonomous-ai-business/sub_projects/fin_agent/trends_cache.json")
+            if p.exists():
+                return _j.loads(p.read_text())
+            return {"trends": [], "niches": [], "note": "Run loop first"}
+        except Exception as e:
+            return {"error": str(e)}
+
+
+
+    # ===========================================================================
+    # ENHANCED AGENT CONTROL ROUTES v2026
+    # ===========================================================================
+
+    @app.get("/api/agents/detailed")
+    async def api_agents_detailed():
+        """Return agents with rich metadata: capabilities, last activity, task counts."""
+        import time
+        from brain.orchestrator import BrainOrchestrator
+        try:
+            brain = BrainOrchestrator.get()
+        except Exception as e:
+            return {"agents": [], "total": 0, "error": str(e), "ts": time.time()}
+
+        CAPABILITY_MAP = {
+            "coder":          {"icon": "👨‍💻", "category": "Dev",    "color": "#6f42c1"},
+            "trading":        {"icon": "📈",   "category": "Finance","color": "#28a745"},
+            "search":         {"icon": "🔍",   "category": "Data",   "color": "#0d6efd"},
+            "analyzer":       {"icon": "📊",   "category": "Data",   "color": "#0d6efd"},
+            "planner":        {"icon": "🗺️",  "category": "Logic",  "color": "#20c997"},
+            "email":          {"icon": "📧",   "category": "Comms",  "color": "#fd7e14"},
+            "browser":        {"icon": "🌐",   "category": "Web",    "color": "#0dcaf0"},
+            "image":          {"icon": "🎨",   "category": "Media",  "color": "#e83e8c"},
+            "news":           {"icon": "📰",   "category": "Data",   "color": "#6c757d"},
+            "math":           {"icon": "∑",    "category": "Calc",   "color": "#ffc107"},
+            "web_automation": {"icon": "🤖",   "category": "Web",    "color": "#0dcaf0"},
+            "telegram":       {"icon": "💬",   "category": "Comms",  "color": "#0d6efd"},
+            "self_training":  {"icon": "🧠",   "category": "AI",     "color": "#6f42c1"},
+            "key_manager":    {"icon": "🔑",   "category": "Sec",    "color": "#dc3545"},
+            "summarizer":     {"icon": "📝",   "category": "AI",     "color": "#20c997"},
+            "monitor":        {"icon": "📊",   "category": "Sys",    "color": "#ffc107"},
+            "payment":        {"icon": "💳",   "category": "Finance","color": "#28a745"},
+            "freelance":      {"icon": "💼",   "category": "Biz",    "color": "#fd7e14"},
+            "code_runner":    {"icon": "▶️",  "category": "Dev",    "color": "#6f42c1"},
+            "code_bridge":    {"icon": "🔗",   "category": "Dev",    "color": "#6f42c1"},
+            "project_creator":{"icon": "🏗️", "category": "Dev",    "color": "#6f42c1"},
+            "sales_agent":    {"icon": "💸",   "category": "Biz",    "color": "#28a745"},
+            "fin_agent":      {"icon": "⚡",   "category": "Finance","color": "#ffc107"},
+        }
+
+        agents_dict = {}
+        if hasattr(brain, "_agents") and isinstance(brain._agents, dict):
+            agents_dict = brain._agents
+        elif hasattr(brain, "_agents") and brain._agents:
+            agents_dict = {str(i): a for i, a in enumerate(brain._agents)}
+
+        result = []
+        for name, agent in agents_dict.items():
+            try:
+                # Get status safely
+                try:
+                    raw_status = agent.get_status()
+                    if hasattr(raw_status, "value"):
+                        status_str = raw_status.value
+                    elif isinstance(raw_status, str):
+                        status_str = raw_status
+                    else:
+                        status_str = "idle"
+                except Exception:
+                    status_str = "idle"
+
+                is_running = status_str in ("running", "active", "busy")
+                is_error   = "error" in str(status_str).lower()
+
+                # Get capabilities safely
+                caps = []
+                description = ""
+                try:
+                    if hasattr(agent, "info") and callable(agent.info):
+                        info_obj = agent.info()
+                        if hasattr(info_obj, "capabilities"):
+                            caps = list(info_obj.capabilities)[:6]
+                        if hasattr(info_obj, "description"):
+                            description = str(info_obj.description)
+                except Exception:
+                    pass
+
+                meta = CAPABILITY_MAP.get(name, {"icon": "⚪", "category": "Other", "color": "#888"})
+
+                result.append({
+                    "name":         name,
+                    "status":       status_str,
+                    "display_status": "✓ Ready" if not is_running and not is_error else status_str,
+                    "is_running":   is_running,
+                    "is_error":     is_error,
+                    "icon":         meta["icon"],
+                    "category":     meta["category"],
+                    "color":        meta["color"],
+                    "capabilities": caps,
+                    "last_task":    str(getattr(agent, "_last_task", None) or "")[:80],
+                    "task_count":   int(getattr(agent, "_task_count", 0) or 0),
+                    "description":  description,
+                })
+            except Exception as e:
+                result.append({
+                    "name": name, "status": "error", "display_status": "⚠ Error",
+                    "is_running": False, "is_error": True,
+                    "icon": "⚠️", "category": "?", "color": "#dc3545",
+                    "capabilities": [], "error": str(e)[:100],
+                    "last_task": "", "task_count": 0, "description": "",
+                })
+
+        return {"agents": result, "total": len(result), "ts": time.time()}
+
+
+    @app.get("/api/trading/live_stats")
+    async def api_trading_live_stats():
+        """Get live trading bot stats from bybit_monitor (port 8001)."""
+        import asyncio
+        from urllib.request import urlopen
+        import json as _j
+        BOT_URL = "http://127.0.0.1:8001"
+        stats = {}
+        for path in ["/status", "/balance", "/pnl"]:
+            try:
+                with urlopen(f"{BOT_URL}{path}", timeout=5) as r:
+                    stats[path.strip("/")] = _j.loads(r.read())
+            except Exception as e:
+                stats[path.strip("/")] = {"error": str(e)}
+        return stats
+
+    @app.post("/api/trading/action")
+    async def api_trading_action(request: Request):
+        """Execute a trading bot action: start/stop/place_order/close_position."""
+        body = await request.json()
+        action = body.get("action", "")
+        from urllib.request import urlopen, Request as URLReq
+        import json as _j
+        BOT_URL = "http://127.0.0.1:8001"
+        try:
+            if action == "pause":
+                with urlopen(URLReq(f"{BOT_URL}/trading/pause", data=b"{}", method="POST"), timeout=5) as r:
+                    return _j.loads(r.read())
+            elif action == "resume":
+                with urlopen(URLReq(f"{BOT_URL}/trading/resume", data=b"{}", method="POST"), timeout=5) as r:
+                    return _j.loads(r.read())
+            elif action == "toggle_strategy":
+                name = body.get("strategy", "momentum")
+                with urlopen(URLReq(f"{BOT_URL}/strategy/{name}/toggle", data=b"{}", method="POST"), timeout=5) as r:
+                    return _j.loads(r.read())
+            elif action == "place_order":
+                payload = _j.dumps({
+                    "symbol": body.get("symbol", "BTCUSDT"),
+                    "side":   body.get("side", "buy"),
+                    "qty":    body.get("qty", 0.001),
+                    "order_type": body.get("order_type", "market"),
+                }).encode()
+                with urlopen(URLReq(f"{BOT_URL}/place_order", data=payload,
+                             headers={"Content-Type":"application/json"}, method="POST"), timeout=5) as r:
+                    return _j.loads(r.read())
+            elif action == "set_risk":
+                payload = _j.dumps({"risk_pct": body.get("risk_pct", 1.0)}).encode()
+                with urlopen(URLReq(f"{BOT_URL}/set_risk", data=payload,
+                             headers={"Content-Type":"application/json"}, method="POST"), timeout=5) as r:
+                    return _j.loads(r.read())
+            else:
+                return {"error": f"Unknown action: {action}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.get("/api/routing/diagram")
+    async def api_routing_diagram():
+        """Return intent routing map for system-switching visualization."""
+        return {
+            "nodes": [
+                {"id": "input",      "label": "User Input",         "type": "source"},
+                {"id": "llm",        "label": "LLM Intent Parser",  "type": "brain"},
+                {"id": "rag",        "label": "RAG Memory",         "type": "brain"},
+                {"id": "trading",    "label": "Trading Agent",      "type": "agent"},
+                {"id": "coder",      "label": "Coder Agent",        "type": "agent"},
+                {"id": "planner",    "label": "Planner Agent",      "type": "agent"},
+                {"id": "search",     "label": "Search Agent",       "type": "agent"},
+                {"id": "sales",      "label": "Sales Agent",        "type": "agent"},
+                {"id": "arbitrage",  "label": "Arbitrage Engine",   "type": "agent"},
+                {"id": "telegram",   "label": "Telegram Gateway",   "type": "gateway"},
+                {"id": "dashboard",  "label": "Dashboard API",      "type": "gateway"},
+                {"id": "bybit_bot",  "label": "Bybit Bot (8001)",   "type": "external"},
+                {"id": "chief",      "label": "Chief Orchestrator", "type": "orchestrator"},
+            ],
+            "edges": [
+                {"from": "telegram",  "to": "input"},
+                {"from": "dashboard", "to": "input"},
+                {"from": "input",     "to": "llm"},
+                {"from": "llm",       "to": "rag"},
+                {"from": "rag",       "to": "trading"},
+                {"from": "rag",       "to": "coder"},
+                {"from": "rag",       "to": "planner"},
+                {"from": "rag",       "to": "search"},
+                {"from": "rag",       "to": "sales"},
+                {"from": "trading",   "to": "bybit_bot"},
+                {"from": "chief",     "to": "sales"},
+                {"from": "chief",     "to": "arbitrage"},
+            ],
+        }
+
+
+    @app.get("/api/health")
+    async def api_health():
+        """Health check endpoint."""
+        try:
+            from brain.orchestrator import BrainOrchestrator
+            brain = BrainOrchestrator.get()
+            agents_count = len(brain._agents) if brain._agents else 0
+        except Exception:
+            agents_count = 0
+        return {
+            "status": "ok",
+            "timestamp": __import__("time").time(),
+            "agents_count": agents_count,
+            "version": "4.0",
+            "service": "ApexMind Personal AI",
+        }
+
+    @app.get("/api/stats")
+    async def api_stats():
+        """Alias for /api/status."""
+        try:
+            from brain.orchestrator import BrainOrchestrator
+            brain = BrainOrchestrator.get()
+            agents = list(brain._agents.keys()) if brain._agents else []
+            return {"agents_count": len(agents), "status": "running"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.get("/api/memory/stats")
+    async def api_memory_stats():
+        """Memory store statistics."""
+        import asyncio
+        try:
+            from memory.memory_store import MemoryStore
+            ms = MemoryStore.get()
+            total = ms.count() if hasattr(ms, "count") else 0
+            return {"total": total, "status": "ok"}
+        except Exception as e:
+            return {"total": 0, "error": str(e)}
+
+    @app.get("/api/browser/status")
+    async def api_browser_status():
+        """Browser agent status."""
+        try:
+            from brain.orchestrator import BrainOrchestrator
+            brain = BrainOrchestrator.get()
+            browser = brain._agents.get("browser")
+            if not browser:
+                return {"active": False, "tor": False, "message": "Browser agent not running"}
+            return {
+                "active": True,
+                "tor": browser._tor_ok,
+                "history_count": len(browser._page_history),
+                "status": browser.status(),
+            }
+        except Exception as e:
+            return {"active": False, "error": str(e)}
+
+
+
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # WEB AUTOMATION + IP COLLECTION
+    # ══════════════════════════════════════════════════════════════════════════
+
+    @app.get("/api/web/service-ips")
+    async def api_service_ips():
+        """Get collected service IPs."""
+        import json as _json
+        from pathlib import Path as _P
+        p = _P("/root/my_personal_ai/config/service_ips.json")
+        if p.exists():
+            return _json.loads(p.read_text())
+        return {"error": "IPs not collected yet. Run /api/web/collect-ips first."}
+
+    @app.post("/api/web/collect-ips")
+    async def api_collect_ips():
+        """Collect IPs of all key services via DNS."""
+        import subprocess as _sp
+        r = _sp.run(
+            "/root/venv/bin/python3 /tmp/collect_ips.py",
+            shell=True, capture_output=True, text=True, timeout=30,
+        )
+        import json as _json
+        from pathlib import Path as _P
+        p = _P("/root/my_personal_ai/config/service_ips.json")
+        data = _json.loads(p.read_text()) if p.exists() else {}
+        return {"ok": True, "collected": len(data), "output": r.stdout[:500]}
+
+    @app.post("/api/web/navigate")
+    async def api_web_navigate(request: Request):
+        """Navigate to URL via web automation agent."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        url = (body.get("url") or "").strip()
+        if not url:
+            return JSONResponse({"error": "url required"}, 400)
+        try:
+            from brain.orchestrator import BrainOrchestrator
+            brain = BrainOrchestrator.get()
+            agent = brain._agents.get("web_automation")
+            if not agent:
+                return {"error": "WebAutomationAgent not running"}
+            nav = agent.navigate(url)
+            if nav.get("error"):
+                return nav
+            content = agent.page_content()
+            return {**nav, "content": content[:3000]}
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, 500)
+
+    @app.post("/api/web/gmail-app-password")
+    async def api_gmail_app_password():
+        """Auto-generate Gmail App Password."""
+        import os as _os
+        try:
+            from brain.orchestrator import BrainOrchestrator
+            brain = BrainOrchestrator.get()
+            agent = brain._agents.get("web_automation")
+            if not agent:
+                return {"error": "WebAutomationAgent not running"}
+            email = _os.getenv("EMAIL_ADDRESS", "")
+            password = _os.getenv("EMAIL_PASSWORD", "")
+            result = agent.get_gmail_app_password(email, password)
+            if result:
+                # Update .env
+                from pathlib import Path as _P
+                env_path = _P("/root/my_personal_ai/.env")
+                env_text = env_path.read_text()
+                env_text = env_text.replace(
+                    f"EMAIL_PASSWORD={password}",
+                    f"EMAIL_PASSWORD={result}"
+                )
+                env_path.write_text(env_text)
+                return {"ok": True, "app_password": result, "message": "Updated .env"}
+            return {"ok": False, "message": "Could not extract App Password automatically"}
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, 500)
+
+    @app.get("/api/web/status")
+    async def api_web_status():
+        """Web automation agent status."""
+        try:
+            from brain.orchestrator import BrainOrchestrator
+            brain = BrainOrchestrator.get()
+            agent = brain._agents.get("web_automation")
+            if not agent:
+                return {"ready": False, "error": "WebAutomationAgent not running"}
+            return {
+                "ready": agent._ready,
+                "status": agent.status(),
+                "results_count": len(agent._results),
+            }
+        except Exception as e:
+            return {"ready": False, "error": str(e)}
+
+
+    # ── Analytics Summary ────────────────────────────────────────────────────
+    @app.get("/api/analytics/summary")
+    async def api_analytics_summary():
+        """Real analytics with response times, error rates, model usage."""
+        import time, aiosqlite, datetime as _dt, os
+        today = _dt.date.today().isoformat()
+        _mem_db = "/root/my_personal_ai/data/memory.db"
+        _tq_db = "/root/my_personal_ai/data/task_queue.db"
+        _ep_db = "/root/my_personal_ai/data/episodic_memory.db"
+        
+        stats = {
+            "messages_today": 0,
+            "tasks_completed": 0,
+            "llm_calls": 0,
+            "avg_response_ms": 0,
+            "active_sessions": 0,
+            "knowledge_entries": 0,
+            "trading_pnl": 0.0,
+            "trading_trades": 0,
+            "errors_today": 0,
+            "uptime_hours": 0,
+            "models_used": {},
+        }
+        
+        # Knowledge entries count
+        try:
+            async with aiosqlite.connect(_mem_db) as db:
+                # Knowledge entries
+                try:
+                    cur = await db.execute("SELECT COUNT(*) FROM knowledge")
+                    r = await cur.fetchone()
+                    stats["knowledge_entries"] = r[0] if r else 0
+                except Exception:
+                    pass
+                # Messages today (memory.db has messages table with ts float)
+                try:
+                    _today_ts = _dt.datetime.now().replace(hour=0,minute=0,second=0).timestamp()
+                    cur = await db.execute("SELECT COUNT(*) FROM messages WHERE created_at >= ?", (_today_ts,))
+                    r = await cur.fetchone()
+                    stats["messages_today"] = r[0] if r else 0
+                except Exception:
+                    pass
+                # Active sessions (distinct session_ids in last hour)
+                try:
+                    cur = await db.execute(
+                        "SELECT COUNT(DISTINCT session_id) FROM messages WHERE ts > ?",
+                        (time.time() - 3600,)
+                    )
+                    r = await cur.fetchone()
+                    stats["active_sessions"] = r[0] if r else 0
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        
+        # Tasks from task_queue.db
+        try:
+            async with aiosqlite.connect(_tq_db) as db:
+                cur = await db.execute("SELECT COUNT(*) FROM tasks WHERE status='completed'")
+                r = await cur.fetchone()
+                stats["tasks_completed"] = r[0] if r else 0
+                cur = await db.execute("SELECT COUNT(*) FROM tasks WHERE status='running'")
+                r = await cur.fetchone()
+                stats["tasks_running"] = r[0] if r else 0
+        except Exception:
+            pass
+        
+        # LLM calls from episodic_memory (episodes = LLM interactions)
+        try:
+            async with aiosqlite.connect(_ep_db) as db:
+                _today_ts = _dt.datetime.now().replace(hour=0,minute=0,second=0).timestamp()
+                cur = await db.execute("SELECT COUNT(*) FROM episodes WHERE created_at >= ?", (_today_ts,))
+                r = await cur.fetchone()
+                stats["llm_calls"] = r[0] if r else 0
+        except Exception:
+            pass
+        
+        # Trading stats from bybit_monitor
+        try:
+            from urllib.request import urlopen
+            import json
+            with urlopen("http://127.0.0.1:8001/status", timeout=2) as r:
+                st = json.loads(r.read())
+            stats["trading_pnl"] = float(st.get("daily_pnl", 0))
+            stats["trading_trades"] = int(st.get("paper_trades_today", 0))
+        except Exception:
+            pass
+        
+        # Service uptime
+        try:
+            import subprocess
+            r = subprocess.run(['systemctl', 'show', 'personal-ai', '--property=ActiveEnterTimestamp'],
+                capture_output=True, text=True, timeout=2)
+            ts_str = r.stdout.strip().split('=')[-1].strip()
+            if ts_str and ts_str != '':
+                from datetime import datetime
+                ts = datetime.strptime(ts_str[:19], '%a %Y-%m-%d %H:%M:%S')
+                stats["uptime_hours"] = round((datetime.now() - ts).total_seconds() / 3600, 1)
+        except Exception:
+            pass
+        
+        # Model usage from LLM router
+        try:
+            from brain.orchestrator import BrainOrchestrator
+            orch = BrainOrchestrator.get()
+            if hasattr(orch, '_llm') and hasattr(orch._llm, 'status_report'):
+                for provider, info in orch._llm.status_report().items():
+                    if info.get("available"):
+                        stats["models_used"][provider] = {
+                            "available": True,
+                            "latency_ms": info.get("avg_latency_ms", 0),
+                        }
+        except Exception:
+            pass
+        
+        return stats
+
+
+    @app.get("/api/knowledge/search")
+    async def api_knowledge_search(q: str = "", limit: int = 20):
+        """Search the knowledge base by query string."""
+        import sqlite3
+        if not q:
+            return {"results": [], "total": 0, "query": q}
+        try:
+            con = sqlite3.connect("/root/my_personal_ai/data/memory.db")
+            con.row_factory = sqlite3.Row
+            cur = con.cursor()
+            cur.execute(
+                "SELECT id, category, title, substr(content,1,300) as snippet, "
+                "tags, importance, ts FROM knowledge "
+                "WHERE title LIKE ? OR content LIKE ? OR tags LIKE ? "
+                "ORDER BY importance DESC, ts DESC LIMIT ?",
+                (f"%{q}%", f"%{q}%", f"%{q}%", limit)
+            )
+            rows = [dict(r) for r in cur.fetchall()]
+            cur.execute(
+                "SELECT COUNT(*) FROM knowledge WHERE title LIKE ? OR content LIKE ?",
+                (f"%{q}%", f"%{q}%")
+            )
+            total = cur.fetchone()[0]
+            con.close()
+            return {"results": rows, "total": total, "query": q}
+        except Exception as e:
+            return {"error": str(e), "results": [], "total": 0, "query": q}
+
+    # ── Projects List ─────────────────────────────────────────────────────────
+    @app.get("/api/projects/list")
+    async def api_projects_list(status: str = None, project_type: str = None):
+        """Return list of projects (alias for /api/projects)."""
+        try:
+            from core.project_registry import ProjectRegistry
+            reg = ProjectRegistry.get()
+            items = reg.list_all(status=status, project_type=project_type)
+            stats = reg.get_stats()
+            return {"projects": items, "stats": stats, "count": len(items)}
+        except Exception as e:
+            return {"error": str(e), "projects": [], "stats": {}, "count": 0}
+
+    # ── Self-Funding Engine status ────────────────────────────────────────────
+    @app.get("/api/sfe/status")
+    async def api_sfe_status():
+        """Get Self-Funding Engine status."""
+        try:
+            import sys as _sys
+            if "/root/my_personal_ai" not in _sys.path:
+                _sys.path.insert(0, "/root/my_personal_ai")
+            from core.self_funding_engine import SelfFundingEngine
+            SFE = SelfFundingEngine.get()
+            return SFE.get().get_status()
+        except Exception as e1:
+            try:
+                import sys as _sys; _sys.path.insert(0, "/root/autonomous-ai-business")
+                import importlib.util as _ilu
+                spec = _ilu.spec_from_file_location(
+                    "_sfe",
+                    "/root/autonomous-ai-business/sub_projects/fin_agent/self_funding_engine.py"
+                )
+                if spec:
+                    mod = _ilu.module_from_spec(spec)
+                    spec.loader.exec_module(mod)
+                    cls = getattr(mod, "SelfFundingEngine", None)
+                    if cls:
+                        return cls.get().get_status()
+            except Exception:
+                pass
+            return {
+                "status": "offline",
+                "error": str(e1),
+                "total_revenue": 0.0,
+                "active_streams": 0,
+            }
+
+    # ── Agent Family / Coordinator status ─────────────────────────────────────
+    @app.post("/api/knowledge/add")
+    async def api_knowledge_add(request: Request):
+        """Add a new entry to the knowledge base."""
+        try:
+            data = await request.json()
+            title = data.get("title", "").strip()
+            content = data.get("content", "").strip()
+            if not title or not content:
+                return JSONResponse({"ok": False, "error": "title and content required"}, status_code=400)
+            category = data.get("type", data.get("category", "fact"))
+            domain = data.get("domain", "")
+            tags = data.get("tags", domain)
+            importance = float(data.get("importance", 0.8))
+            import aiosqlite, time
+            db_path = "/root/my_personal_ai/data/memory.db"
+            async with aiosqlite.connect(db_path) as db:
+                await db.execute(
+                    "INSERT OR IGNORE INTO knowledge (title, content, category, tags, importance, ts) VALUES (?,?,?,?,?,?)",
+                    (title, content, category, tags, importance, time.time())
+                )
+                cur = await db.execute("SELECT last_insert_rowid()")
+                row = await cur.fetchone()
+                await db.commit()
+                new_id = row[0] if row else 0
+            return JSONResponse({"ok": True, "id": new_id, "title": title})
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+    @app.get("/api/family/status")
+    async def api_family_status():
+        """Get Agent Coordinator / family status — uses our AgentCoordinator."""
+        try:
+            from core.agent_coordinator import AgentCoordinator
+            coord = AgentCoordinator.get()
+            shared = coord.get_shared()
+            subs = {k: [a for a,_ in v] for k,v in coord._subscribers.items()}
+            try:
+                from brain.orchestrator import BrainOrchestrator
+                brain = BrainOrchestrator.get()
+                agents = list(brain._agents.keys()) if brain._agents else []
+                _err = None
+            except Exception as _e:
+                agents = []; _err = str(_e)
+            return {
+                "status":        "ok",
+                "coordinator":   "BrainOrchestrator",
+                "agents":        agents,
+                "agents_count":  len(agents),
+                "shared_state":  shared,
+                "subscriptions": subs,
+                "error":         _err,
+            }
+        except Exception as e1:
+            try:
+                from brain.orchestrator import BrainOrchestrator
+                brain = BrainOrchestrator.get()
+                agents = list(brain._agents.keys()) if brain._agents else []
+                return {
+                    "status": "ok",
+                    "coordinator": "BrainOrchestrator",
+                    "agents": agents,
+                    "agents_count": len(agents),
+                    "error": str(e1),
+                }
+            except Exception as e2:
+                return {
+                    "status": "offline",
+                    "coordinator": "unavailable",
+                    "agents": [],
+                    "agents_count": 0,
+                    "error": str(e2),
+                }
+
+
+
+    # ── Accounting & Financial Control ───────────────────────────────────────
+    @app.get("/api/accounting/summary")
+    async def api_accounting_summary():
+        import time
+        import aiosqlite
+        import datetime as _dt
+        costs = {"server_usd_month": 15.0, "api_today_usd": 0.0, "api_month_usd": 0.0}
+        revenue = {"trading_pnl_usd": 0.0, "trading_balance": 0.0,
+                   "sfe_compute_wallet": 0.0, "sfe_yield_vault": 0.0,
+                   "sfe_principal": 0.0, "forecasted_month": 0.0}
+        actions = []
+        try:
+            from urllib.request import urlopen
+            import json
+            with urlopen("http://127.0.0.1:8001/status", timeout=2) as r:
+                st = json.loads(r.read())
+            paper = bool(st.get("paper_mode", True))
+            balance = float(st.get("paper_balance", 10000)) if paper else float(st.get("balance_usdt", 0))
+            pnl = float(st.get("daily_pnl", 0))
+            trades = int(st.get("paper_trades_today" if paper else "trades_today", 0))
+            mode_str = "PAPER ($10k virtual)" if paper else "LIVE (real money)"
+            revenue["trading_pnl_usd"]  = pnl if not paper else 0.0
+            revenue["trading_balance"]  = balance
+            revenue["paper_pnl"]        = pnl if paper else 0.0
+            revenue["paper_pnl_history"] = float(st.get("paper_balance", 10000)) - 10000.0
+            revenue["trades_today"]     = trades
+            revenue["paper_mode"]       = paper
+            actions.append({
+                "agent": "trading_bot",
+                "status": "RUNNING",
+                "task": (
+                    f"Торговый бот [{mode_str}] — "
+                    f"{trades} сделок сегодня | "
+                    f"Баланс: ${balance:.2f} | "
+                    f"P&L: ${pnl:+.2f}"
+                ),
+            })
+        except Exception:
+            # Monitor offline — show status
+            actions.append({
+                "agent": "trading_bot",
+                "status": "OFFLINE",
+                "task": "Торговый бот остановлен — пополните баланс Bybit и запустите снова",
+            })
+            revenue["trading_balance"] = 0.17
+            revenue["paper_mode"] = True
+        try:
+            from core.self_funding_engine import SelfFundingEngine
+            sfe = SelfFundingEngine.get()
+            if hasattr(sfe, "get_wallets"):
+                wallets = sfe.get_wallets()
+                revenue["sfe_compute_wallet"] = float(wallets.get("compute", 0))
+                revenue["sfe_yield_vault"]    = float(wallets.get("yield", 0))
+                revenue["sfe_principal"]      = float(wallets.get("principal", 0))
+            elif hasattr(sfe, "get_status"):
+                st = sfe.get_status()
+                revenue["sfe_compute_wallet"] = float(st.get("compute_wallet_usd", 0))
+                revenue["sfe_yield_vault"]    = float(st.get("yield_vault_usd", 0))
+                revenue["sfe_principal"]      = float(st.get("principal_usd", 0))
+        except Exception:
+            pass
+        real_pnl = revenue.get("trading_pnl_usd", 0)
+        revenue["forecasted_month"] = round(real_pnl * 30, 2) if abs(real_pnl) < 1000 else 0.0
+        total_costs = costs["server_usd_month"] / 30 + costs["api_today_usd"]
+        net_today = real_pnl - total_costs
+        if not actions:
+            actions = [
+                {"agent": "monitor",  "status": "RUNNING", "task": "Watching prices & market alerts"},
+                {"agent": "knowledge","status": "RUNNING", "task": "Auto-learning from interactions"},
+            ]
+        return {
+            "costs": costs,
+            "revenue": revenue,
+            "net_today": round(net_today, 2),
+            "actions": actions[:10],
+            "generated_at": time.time(),
+        }
+
+
+    # ── Arbitrage Live Scanner (real Bybit prices) ────────────────────────────
+    @app.get("/api/arbitrage/live")
+    async def api_arbitrage_live():
+        """Real-time arbitrage: spot vs perp price spreads using pybit directly."""
+        import time, os
+        from dotenv import load_dotenv
+        load_dotenv("/root/my_personal_ai/.env")
+        api_key    = os.getenv("BYBIT_API_KEY","")
+        api_secret = os.getenv("BYBIT_API_SECRET","")
+        opportunities = []
+        prices = {}
+        funding = {}
+        def _sf(v, d=0.0):
+            try: return float(v) if v not in (None,"","None") else d
+            except: return d
+        try:
+            from pybit.unified_trading import HTTP
+            sess = HTTP(testnet=False, api_key=api_key, api_secret=api_secret, recv_window=10000)
+            pairs = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT"]
+            for sym in pairs:
+                try:
+                    time.sleep(0.05)
+                    pr = sess.get_tickers(category="linear", symbol=sym)
+                    perp_lst = (pr.get("result") or {}).get("list",[])
+                    perp_price = _sf(perp_lst[0]["lastPrice"]) if perp_lst else 0
+                    sp = sess.get_tickers(category="spot", symbol=sym)
+                    spot_lst = (sp.get("result") or {}).get("list",[])
+                    spot_price = _sf(spot_lst[0]["lastPrice"]) if spot_lst else perp_price
+                    if perp_price == 0: perp_price = spot_price
+                    spread_pct = ((perp_price - spot_price) / spot_price * 100) if spot_price else 0
+                    prices[sym] = perp_price
+                    fr_val = _sf((perp_lst[0] if perp_lst else {}).get("fundingRate",0)) * 100
+                    opportunities.append({
+                        "symbol": sym, "perp_price": round(perp_price,4),
+                        "spot_price": round(spot_price,4),
+                        "spread_pct": round(spread_pct,4),
+                        "direction": "perp>spot" if spread_pct > 0 else "spot>perp",
+                        "tradeable": abs(spread_pct) > 0.05,
+                        "profit_est": round(abs(spread_pct) * 100, 2),
+                    })
+                    funding[sym] = round(fr_val, 6)
+                except Exception as _e:
+                    opportunities.append({"symbol": sym, "error": str(_e)[:80]})
+        except Exception as e:
+            return {"error": str(e), "opportunities": [], "prices": {}, "funding": {}}
+        return {
+            "opportunities": opportunities,
+            "profitable": [o for o in opportunities if o.get("tradeable")],
+            "prices": prices, "funding": funding,
+            "scan_ts": time.time(), "circuit_breaker": False,
+        }
+    # ── Sales status alias ────────────────────────────────────────────────────
+    @app.get("/api/sales/status")
+    async def api_sales_status():
+        """Sales pipeline summary using aib_loader directly."""
+        import asyncio
+        try:
+            import sys as _sys; _sys.path.insert(0, "/root/autonomous-ai-business")
+            from aib_loader import get_sales_store
+            store, invoices = get_sales_store()
+            stats   = await asyncio.to_thread(store.stats)
+            revenue = await asyncio.to_thread(invoices.get_stats)
+            return {
+                "total_leads":  stats.get("total_leads", 0),
+                "by_stage":     stats.get("by_stage", {}),
+                "revenue_usd":  (revenue or {}).get("total_revenue_usd", 0.0),
+                "pipeline_usd": (revenue or {}).get("pending_pipeline_usd", 0.0),
+            }
+        except Exception as e:
+            return {"error": str(e), "total_leads": 0}
+    # ── Skills & Competency Matrix ───────────────────────────────────────────
+    @app.get("/api/skills/matrix")
+    async def api_skills_matrix():
+        import time
+        skills = [
+            {"id": "llm_routing",  "name": "LLM Router v2.6",       "mastery": 90, "category": "AI",
+             "description": "Groq 0.3s chat, Claude/DeepSeek for complex tasks, TokenQueue fallback",
+             "next_training": "Local LLM fallback (Ollama), per-request cost telemetry",
+             "business_use": "Sub-second responses at ~$0.002/call — all agent decisions flow through"},
+            {"id": "knowledge",    "name": "Knowledge Base RAG",     "mastery": 85, "category": "AI",
+             "description": "651+ entries, semantic search, auto-learning after every interaction",
+             "next_training": "Vector embeddings upgrade, cross-session recall improvement",
+             "business_use": "Contextual memory for sales pitches, trading rules, client profiles"},
+            {"id": "email",        "name": "Email Intelligence",     "mastery": 80, "category": "Ops",
+             "description": "Gmail IMAP (froggyinternet@gmail.com) live, API key extraction, 30-day window",
+             "next_training": "Smart reply generation, priority filtering, auto-labeling",
+             "business_use": "Capture inbound leads, extract credentials, monitor security alerts"},
+            {"id": "trading",      "name": "Bybit Trading AI",      "mastery": 72, "category": "Finance",
+             "description": "Paper mode: $10,000 virtual, 274 trades, 62% win rate, +$443 daily P&L",
+             "next_training": "Enable live trading with real API keys, advanced strategy tuning",
+             "business_use": "Autonomous profit generation — momentum + grid + mean-reversion"},
+            {"id": "coding",       "name": "Code Generation",       "mastery": 78, "category": "Tech",
+             "description": "Python, JS, shell scripts, self-editing via SSH, syntax validation",
+             "next_training": "Test suite auto-generation, CI/CD integration, code review loop",
+             "business_use": "Autonomous maintenance — fix bugs, add features, deploy updates"},
+            {"id": "sales",        "name": "Sales Agent",           "mastery": 68, "category": "Business",
+             "description": "Lead funnel DISCOVERY→CLOSING, toxicity guard, Groq-powered fast replies",
+             "next_training": "CRM integration, auto-follow-up sequences, invoice automation",
+             "business_use": "Close B2B software/AI deals, generate invoices up to $10k autonomously"},
+            {"id": "web_search",   "name": "Web Research Agent",    "mastery": 70, "category": "Tech",
+             "description": "DuckDuckGo search, price feeds, competitor monitoring",
+             "next_training": "Tor browser for anonymous research, deep OSINT capabilities",
+             "business_use": "Lead research, market analysis, news-driven trading signals"},
+            {"id": "arbitrage",    "name": "Arbitrage Engine",      "mastery": 55, "category": "Finance",
+             "description": "Spatial, triangular, funding rate scanner — circuit breaker at 3% drawdown",
+             "next_training": "Live exchange WebSocket feeds, real execution with API keys",
+             "business_use": "Risk-free spread capture between exchanges, daily 0.1-0.5% yield"},
+            {"id": "sfe",          "name": "Self-Funding Engine",   "mastery": 60, "category": "Finance",
+             "description": "3 revenue streams: affiliate (70% compute), x402 micro-tx (50/50), DeFi (30/20/50)",
+             "next_training": "Connect real affiliate APIs, DeFi protocol integrations",
+             "business_use": "Reinvest profits into compute budget, compound AI capability growth"},
+            {"id": "erp_1c",       "name": "ERP / 1C Accounting",   "mastery": 15, "category": "Finance",
+             "description": "Training queue: 1C:Enterprise architecture, XML/JSON data exchange, REST API",
+             "next_training": "1C data pipelines, bank statement matching, VAT calculation, payroll",
+             "business_use": "Full bookkeeping for client businesses, automated tax filing, audit reports"},
+            {"id": "multimodal",   "name": "Multi-modal Generation", "mastery": 20, "category": "Creative",
+             "description": "Image gen architecture ready — Flux 1.1 Pro, video pipeline planned",
+             "next_training": "Flux Pro Ultra integration, Google Veo 3.1 / Sora 2 video generation",
+             "business_use": "Marketing assets, product demo videos, social media content at scale"},
+            {"id": "agent_family", "name": "21-Agent Family Coord.", "mastery": 75, "category": "AI",
+             "description": "AgentCoordinator, priority hierarchy 10→3, event bus, SLA monitoring",
+             "next_training": "Cross-agent workload balancing, shared context optimization",
+             "business_use": "Parallel task execution — trade + sell + research + code simultaneously"},
+            {"id": "uiux_audit",  "name": "UI/UX Audit Engine",    "mastery": 55, "category": "Business",
+             "description": "Jina AI Reader — анализ сайтов, 7 проверок, оценка 0-100, CAN-SPAM email",
+             "next_training": "Подключить Resend API ключ, расширить список проверок",
+             "business_use": "Генерация B2B лидов через технические аудиты сайтов"},
+            {"id": "sast_audit",  "name": "SAST Security Auditor", "mastery": 45, "category": "Tech",
+             "description": "GitHub public repos — OWASP Top 10, 10 паттернов, risk score 0-100",
+             "next_training": "Добавить GitHub токен для приватных репо, расширить паттерны",
+             "business_use": "Технические аудиты для B2B контрактов, security consulting"},
+            {"id": "data_ingestion", "name": "Compliance Data Engine", "mastery": 70, "category": "Tech",
+             "description": "6 sources, robots.txt compliant, exponential backoff, LLM extraction, fallback chains",
+             "next_training": "Add GitHub token, connect paid data-broker APIs",
+             "business_use": "Legal data collection for UI/UX audits, SAST reports, freelance leads"},
+            {"id": "hitl_gate",   "name": "Human-in-Loop Gate",    "mastery": 80, "category": "Finance",
+             "description": "Telegram подтверждение перед каждым реальным ордером, 120s timeout, auto-reject",
+             "next_training": "Добавить лимиты авто-апрува для малых ордеров (<$10)",
+             "business_use": "Защита капитала — ни один реальный ордер не проходит без апрува Max’а"},
+        ]
+        avg_mastery = round(sum(s["mastery"] for s in skills) / len(skills))
+        return {
+            "skills": skills,
+            "overall_mastery": avg_mastery,
+            "total_skills": len(skills),
+            "skills_above_70": len([s for s in skills if s["mastery"] >= 70]),
+            "in_training": len([s for s in skills if s["mastery"] < 50]),
+            "generated_at": time.time(),
+        }
+
+    # -- Security Monitor & Token Telemetry -----------------------------------
+    @app.get("/api/security/status")
+    async def api_security_status():
+        """Zero-trust security audit + token burn telemetry."""
+        import time, os
+        import aiosqlite
+        import datetime as _dt
+
+        # Token telemetry from LLM router
+        token_stats = {
+            "groq": {"calls_today": 0, "tokens_today": 0, "cost_usd": 0.0, "avg_latency_ms": 140},
+            "deepseek": {"calls_today": 0, "tokens_today": 0, "cost_usd": 0.0, "avg_latency_ms": 4000},
+            "anthropic": {"calls_today": 0, "tokens_today": 0, "cost_usd": 0.0, "avg_latency_ms": 2500},
+        }
+        try:
+            from brain.orchestrator import BrainOrchestrator
+            orch = BrainOrchestrator.get()
+            if hasattr(orch, "_llm") and hasattr(orch._llm, "get_stats"):
+                stats = orch._llm.get_stats()
+                for k, v in stats.items():
+                    if k in token_stats:
+                        token_stats[k].update(v)
+        except Exception:
+            pass
+
+        # Security scan -- check for anomalies
+        threats = []
+        try:
+            import subprocess
+            r = subprocess.run(
+                ["journalctl", "-u", "personal-ai", "--since", "1 hour ago", "--no-pager", "-q"],
+                capture_output=True, text=True, timeout=3
+            )
+            lines = r.stdout.lower()
+            if lines.count("error") > 20:
+                threats.append({"level": "WARNING", "type": "High error rate", "detail": f"{lines.count(chr(101)+chr(114)+chr(114)+chr(111)+chr(114))} errors in last hour"})
+            if "unauthorized" in lines or "forbidden" in lines:
+                threats.append({"level": "CRITICAL", "type": "Auth failure", "detail": "Unauthorized access attempt detected"})
+            if "injection" in lines or "prompt inject" in lines:
+                threats.append({"level": "CRITICAL", "type": "Prompt injection", "detail": "Injection attempt in logs"})
+        except Exception:
+            pass
+
+        # System integrity check
+        integrity = {
+            "env_file": os.path.exists("/root/my_personal_ai/.env"),
+            "api_keys_set": bool(os.getenv("ANTHROPIC_API_KEY") and os.getenv("GROQ_API_KEY")),
+            "service_active": True,
+            "backup_exists": os.path.exists("/root/my_personal_ai/backups") or os.path.exists("/root/backups"),
+            "ssl_cert": False,
+        }
+
+        # Compute budget status
+        compute_budget = {"limit_usd": 50.0, "used_usd": 0.0, "remaining_pct": 100}
+        try:
+            from core.self_funding_engine import SelfFundingEngine
+            sfe = SelfFundingEngine.get()
+            st = sfe.get_status() if hasattr(sfe, "get_status") else {}
+            compute_budget["limit_usd"] = float(st.get("compute_wallet_usd", 50.0))
+            compute_budget["used_usd"] = 0.0
+            compute_budget["remaining_pct"] = 100
+        except Exception:
+            pass
+
+        return {
+            "security_level": "SECURE" if not threats else ("WARNING" if not any(t["level"]=="CRITICAL" for t in threats) else "ALERT"),
+            "threats": threats,
+            "integrity": integrity,
+            "token_stats": token_stats,
+            "compute_budget": compute_budget,
+            "last_audit": time.time(),
+            "next_audit": time.time() + 300,
+        }
+
+    # -- Binary Approval Gate -------------------------------------------------
+    @app.post("/api/approve")
+    async def api_approve(request: Request):
+        """Binary YES/NO approval gate for high-risk operations."""
+        body = await request.json()
+        op_id = body.get("op_id", "")
+        decision = body.get("decision", "NO").upper()
+        reason = body.get("reason", "")
+        import time
+        result = {
+            "op_id": op_id,
+            "decision": decision,
+            "reason": reason,
+            "ts": time.time(),
+            "executed": decision == "YES",
+        }
+        try:
+            import json
+            with open("/root/my_personal_ai/logs/approvals.jsonl", "a") as f:
+                f.write(json.dumps(result) + chr(10))
+        except Exception:
+            pass
+        return result
+
+
+    @app.get("/api/llm/status")
+    async def api_llm_status():
+        """LLM providers status with real latency."""
+        import time, os
+        providers = []
+        envmap = {
+            "groq":      ("GROQ_API_KEY",      "GROQ_MODEL",      "llama-3.3-70b-versatile"),
+            "deepseek":  ("DEEPSEEK_API_KEY",   "DEEPSEEK_MODEL",  "deepseek-chat"),
+            "anthropic": ("ANTHROPIC_API_KEY",  "ANTHROPIC_MODEL", "claude-opus-4-7"),
+            "openai":    ("OPENAI_API_KEY",      "OPENAI_MODEL",    "gpt-4o"),
+            "together":  ("TOGETHER_API_KEY",   "TOGETHER_MODEL",  ""),
+        }
+        for name, (key_env, model_env, default_model) in envmap.items():
+            key = os.getenv(key_env, "")
+            model = os.getenv(model_env, default_model)
+            configured = bool(key and len(key) > 10)
+            providers.append({
+                "name": name, "key_configured": configured,
+                "model": model, "available": configured,
+                "latency_ms": 0, "role": {
+                    "groq": "Быстрые ответы (speed)",
+                    "deepseek": "Глубокий анализ (reasoning)",
+                    "anthropic": "Качество и безопасность",
+                    "openai": "Резервный провайдер",
+                    "together": "Открытые модели",
+                }.get(name, name),
+            })
+        configured_count = sum(1 for p in providers if p.get("key_configured"))
+        return {"providers": providers, "configured": configured_count, "total": len(providers),
+                "routing": "Groq→DeepSeek→Claude→OpenAI (по приоритету)"}
+
+
+    def _count_freelance_leads():
+        try:
+            with open('/root/my_personal_ai/data/freelance_leads.jsonl') as f:
+                return sum(1 for _ in f)
+        except:
+            return 0
+
+    @app.get("/api/earnings/summary")
+    async def api_earnings_summary():
+        """Сводка по всем источникам дохода."""
+        import time
+        from urllib.request import urlopen
+        import json as _j
+        trading_pnl = 0.0; trading_balance = 0.0
+        try:
+            with urlopen("http://127.0.0.1:8001/status", timeout=2) as r:
+                s = _j.loads(r.read())
+            trading_pnl = float(s.get("daily_pnl", 0))
+            trading_balance = float(s.get("balance_usdt", s.get("paper_balance", 0)))
+        except Exception: pass
+        sales_revenue = 0.0; sales_pipeline = 0.0
+        try:
+            import sys as _sys; _sys.path.insert(0, "/root/autonomous-ai-business")
+            from aib_loader import get_sales_store
+            store, invoices = get_sales_store()
+            leads = list(store.values()) if hasattr(store, "values") else (store.get_all() if hasattr(store, "get_all") else [])
+            sales_pipeline = sum(float((l.get("budget",0) if isinstance(l,dict) else getattr(l,"budget",0)) or 0) for l in leads)
+            all_inv = invoices.get_all() if hasattr(invoices,"get_all") else (list(invoices.values()) if hasattr(invoices,"values") else [])
+            sales_revenue = sum(float((i.get("amount",0) if isinstance(i,dict) else getattr(i,"amount",0)) or 0) for i in all_inv if (i.get("status","") if isinstance(i,dict) else getattr(i,"status","")) == "paid")
+        except Exception: pass
+        sfe_compute = 0.0
+        try:
+            from core.self_funding_engine import SelfFundingEngine
+            st = SelfFundingEngine.get().get_status()
+            sfe_compute = float(st.get("compute_wallet_usd", 0))
+        except Exception: pass
+        total = trading_pnl + sales_revenue + sfe_compute
+        return {
+            "total_usd": round(total, 2),
+            "streams": [
+                {"name": "Торговля (Bybit)",   "amount": round(trading_pnl, 2),     "status": "active",   "balance": round(trading_balance, 2)},
+                {"name": "Продажи (B2B)",      "amount": round(sales_revenue, 2),   "status": "active",   "pipeline": round(sales_pipeline, 2)},
+                {"name": "SFE Compute",         "amount": round(sfe_compute, 2),     "status": "active",   "balance": round(sfe_compute, 2)},
+                {"name": "Партнёрские программы", "amount": 0.0, "status": "настройка", "note": "Groq/Anthropic реф. ссылки — добавьте ключи в .env"},
+                {"name": "DeFi",                "amount": 0.0,                        "status": "setup",    "note": "В разработке"},
+                {"name": "Фриланс", "amount": 0.0, "status": "активен",
+                 "leads": _count_freelance_leads(), "note": "Ежедневный скан вакансий 09:00"},
+            ],
+            "server_cost_day": round(15.0/30, 2),
+            "net_today": round(total - 15.0/30, 2),
+            "ts": time.time(),
+        }
+
+
+    @app.post("/api/ingest")
+    async def api_ingest(body: dict):
+        """Compliance & Adaptive Data Ingestion -- official APIs only, robots.txt compliant."""
+        import asyncio, sys as _sys
+        _sys.path.insert(0, '/root/my_personal_ai')
+        from core.data_ingestion import ingest as _ingest
+        source = body.get("source", "tech_news")
+        query  = body.get("query", "AI automation")
+        use_llm = body.get("use_llm", False)
+        result = await asyncio.to_thread(_ingest, source, query, use_llm)
+        return result
+

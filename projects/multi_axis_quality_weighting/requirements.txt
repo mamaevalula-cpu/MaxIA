@@ -1,0 +1,3 @@
+# Requirements for multi_axis_quality_weighting
+python-dotenv
+httpx

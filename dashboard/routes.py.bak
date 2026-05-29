@@ -1,0 +1,296 @@
+# -*- coding: utf-8 -*-
+"""dashboard/routes.py — API endpoints for Web Dashboard."""
+from __future__ import annotations
+import logging, time, os
+from pathlib import Path
+from typing import Any
+
+log = logging.getLogger("dashboard.routes")
+
+def register(app):
+    """Register all dashboard routes on a FastAPI app instance."""
+    from fastapi import Request
+    from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
+
+    STATIC = Path(__file__).parent / "static"
+
+    # ── UI ──────────────────────────────────────────────────────────────────
+    @app.get("/", response_class=HTMLResponse)
+    async def index():
+        p = STATIC / "index.html"
+        return HTMLResponse(p.read_text("utf-8")) if p.exists() else HTMLResponse("<h1>Dashboard not built</h1>", 503)
+
+    # ── System status ────────────────────────────────────────────────────────
+    @app.get("/api/status")
+    async def api_status():
+        result: dict[str, Any] = {"ts": time.time(), "service": "ok"}
+        try:
+            from brain.orchestrator import BrainOrchestrator
+            brain = BrainOrchestrator.get()
+            result["agents_count"] = len(brain._agents)
+            result["brain"] = "ok"
+        except Exception as e:
+            result["brain"] = str(e)
+        try:
+            from core.watchdog import SystemWatchdog
+            w = SystemWatchdog.get() if hasattr(SystemWatchdog, "get") else None
+            result["watchdog"] = "ok" if w else "not started"
+        except Exception:
+            result["watchdog"] = "n/a"
+        try:
+            from core.task_queue import TaskQueue
+            result["tasks"] = TaskQueue.get().get_stats()
+        except Exception as e:
+            result["tasks"] = {"error": str(e)}
+        return result
+
+    # ── Agents ───────────────────────────────────────────────────────────────
+    @app.get("/api/agents")
+    async def api_agents():
+        try:
+            from brain.orchestrator import BrainOrchestrator
+            brain = BrainOrchestrator.get()
+            agents = []
+            for name, agent in brain._agents.items():
+                try:
+                    status = str(agent.get_status()) if hasattr(agent, "get_status") else "?"
+                    info   = agent.info() if hasattr(agent, "info") else None
+                    desc   = info.description if info else ""
+                except Exception:
+                    status, desc = "error", ""
+                agents.append({"name": name, "status": status, "desc": desc})
+            return {"agents": agents}
+        except Exception as e:
+            return {"error": str(e), "agents": []}
+
+    # ── LLM providers ────────────────────────────────────────────────────────
+    @app.get("/api/llm")
+    async def api_llm():
+        try:
+            from brain.llm_router import LLMRouter
+            return LLMRouter.get().status_report()
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ── Chat ──────────────────────────────────────────────────────────────────
+    @app.post("/api/chat")
+    async def api_chat(req: Request):
+        body = await req.json()
+        text = body.get("text", "").strip()
+        if not text:
+            return JSONResponse({"error": "empty message"}, 400)
+        try:
+            import asyncio, concurrent.futures
+            from brain.orchestrator import BrainOrchestrator, OrchestratorRequest
+            request = OrchestratorRequest(
+                text=text, source="dashboard",
+                session_id=body.get("session_id", "dashboard"),
+            )
+            loop = asyncio.get_event_loop()
+            resp = await asyncio.wait_for(
+                loop.run_in_executor(None, BrainOrchestrator.get().process, request),
+                timeout=90
+            )
+            return {"reply": resp.text, "model": getattr(resp, "model", "?")}
+        except asyncio.TimeoutError:
+            return {"reply": "⏳ Запрос выполняется слишком долго (>90с).", "model": "timeout"}
+        except Exception as e:
+            log.error("chat error: %s", e)
+            return {"reply": f"❌ {e}", "model": "error"}
+
+    # ── Tasks ─────────────────────────────────────────────────────────────────
+    @app.get("/api/tasks")
+    async def api_tasks():
+        try:
+            from core.task_queue import TaskQueue
+            tasks = TaskQueue.get().list_tasks(limit=30)
+            stats = TaskQueue.get().get_stats()
+            return {"tasks": tasks, "stats": stats}
+        except Exception as e:
+            return {"error": str(e), "tasks": [], "stats": {}}
+
+    @app.post("/api/tasks/cancel/{task_id}")
+    async def api_cancel_task(task_id: str):
+        try:
+            from core.task_queue import TaskQueue
+            ok = TaskQueue.get().cancel(task_id)
+            return {"ok": ok}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    # ── Logs ──────────────────────────────────────────────────────────────────
+    @app.get("/api/logs")
+    async def api_logs(file: str = "system", lines: int = 80):
+        safe = {"system", "brain", "agents", "errors", "service"}
+        if file not in safe:
+            return JSONResponse({"error": "invalid log file"}, 400)
+        try:
+            p = Path(f"/root/my_personal_ai/logs/{file}.log")
+            if not p.exists():
+                return {"lines": []}
+            all_lines = p.read_text("utf-8", errors="replace").splitlines()
+            return {"lines": all_lines[-lines:], "file": file}
+        except Exception as e:
+            return {"error": str(e), "lines": []}
+
+    # ── Trading ───────────────────────────────────────────────────────────────
+    @app.get("/api/trading")
+    async def api_trading():
+        try:
+            from core.trading_bridge import TradingBridge
+            bot = TradingBridge.get().get_status()
+            return {
+                "online":         bot.online,
+                "mode":           bot.mode_label,
+                "balance_usdt":   bot.balance_usdt,
+                "daily_pnl":      bot.daily_pnl,
+                "daily_pnl_pct":  bot.daily_pnl_pct,
+                "open_positions": bot.open_positions,
+                "trades_today":   bot.trades_today,
+                "win_rate":       bot.win_rate,
+                "active_pairs":   bot.active_pairs,
+                "active_strategies": bot.active_strategies,
+            }
+        except Exception as e:
+            return {"online": False, "error": str(e)}
+
+    # ── Memory stats ──────────────────────────────────────────────────────────
+    @app.get("/api/memory")
+    async def api_memory():
+        try:
+            from memory.episodic_memory import EpisodicMemory
+            return EpisodicMemory.get().get_stats()
+        except Exception as e:
+            return {"error": str(e)}
+
+
+    # ── Projects ──────────────────────────────────────────────────────────────
+    @app.get("/api/projects")
+    async def api_projects(status: str = None, project_type: str = None):
+        try:
+            from core.project_registry import ProjectRegistry
+            reg   = ProjectRegistry.get()
+            items = reg.list_all(status=status, project_type=project_type)
+            stats = reg.get_stats()
+            return {"projects": items, "stats": stats}
+        except Exception as e:
+            return {"error": str(e), "projects": [], "stats": {}}
+
+    @app.post("/api/projects")
+    async def api_create_project(req: Request):
+        body = await req.json()
+        try:
+            from core.project_registry import ProjectRegistry
+            pid = ProjectRegistry.get().create(
+                name         = body.get("name", "Untitled"),
+                description  = body.get("description", ""),
+                project_type = body.get("type", "custom"),
+                config       = body.get("config", {}),
+                tags         = body.get("tags", []),
+            )
+            return {"ok": True, "project_id": pid}
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, 500)
+
+    @app.post("/api/projects/{project_id}/status")
+    async def api_project_status(project_id: str, req: Request):
+        body = await req.json()
+        try:
+            from core.project_registry import ProjectRegistry
+            ok = ProjectRegistry.get().set_status(
+                project_id, body.get("status", "running"), body.get("error", "")
+            )
+            return {"ok": ok}
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, 500)
+
+    # ── Full System Diagnostics ───────────────────────────────────────────────
+    @app.get("/api/diagnostics")
+    async def api_diagnostics():
+        diag: dict[str, Any] = {"ts": time.time()}
+        # Memory
+        try:
+            with open("/proc/meminfo") as f:
+                lines = {l.split(":")[0]: int(l.split()[1])
+                         for l in f if ":" in l and len(l.split()) >= 2
+                         and l.split()[1].isdigit()}
+            total = lines.get("MemTotal", 1)
+            avail = lines.get("MemAvailable", total)
+            diag["memory"] = {
+                "total_mb":  total // 1024,
+                "avail_mb":  avail // 1024,
+                "used_pct":  round((1 - avail / total) * 100, 1),
+            }
+        except Exception as e:
+            diag["memory"] = {"error": str(e)}
+        # Disk
+        try:
+            import shutil
+            u = shutil.disk_usage("/root")
+            diag["disk"] = {
+                "total_gb": round(u.total / 1e9, 1),
+                "used_gb":  round(u.used  / 1e9, 1),
+                "free_gb":  round(u.free  / 1e9, 1),
+                "used_pct": round(u.used / u.total * 100, 1),
+            }
+        except Exception as e:
+            diag["disk"] = {"error": str(e)}
+        # Services
+        import subprocess
+        for svc in ["personal-ai", "bybit-monitor"]:
+            try:
+                r = subprocess.run(["systemctl", "is-active", svc],
+                                   capture_output=True, text=True, timeout=3)
+                diag.setdefault("services", {})[svc] = r.stdout.strip()
+            except Exception:
+                diag.setdefault("services", {})[svc] = "unknown"
+        # Self-healing stats
+        try:
+            from monitoring.self_healing import SelfHealingEngine
+            diag["self_healing"] = SelfHealingEngine.get().get_stats()
+        except Exception:
+            diag["self_healing"] = {}
+        # Project stats
+        try:
+            from core.project_registry import ProjectRegistry
+            diag["projects"] = ProjectRegistry.get().get_stats()
+        except Exception:
+            diag["projects"] = {}
+        # Task queue
+        try:
+            from core.task_queue import TaskQueue
+            diag["tasks"] = TaskQueue.get().get_stats()
+        except Exception:
+            diag["tasks"] = {}
+        return diag
+
+
+    # ── /api/settings ────────────────────────────────────────────────────────
+
+    @app.get("/api/settings")
+    async def get_settings():
+        """Получить сохранённые настройки дашборда."""
+        import json as _j
+        from pathlib import Path
+        p = Path("/root/my_personal_ai/data/dashboard_settings.json")
+        defaults = {"preferred_model": "auto", "log_file": "system",
+                    "auto_refresh": True, "refresh_interval_sec": 10, "theme": "dark"}
+        if p.exists():
+            try: defaults.update(_j.loads(p.read_text()))
+            except Exception: pass
+        return defaults
+
+    @app.post("/api/settings")
+    async def save_settings(body: dict):
+        """Сохранить настройки дашборда на сервер."""
+        import json as _j
+        from pathlib import Path
+        p = Path("/root/my_personal_ai/data/dashboard_settings.json")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        allowed = {"preferred_model", "log_file", "auto_refresh",
+                   "refresh_interval_sec", "theme"}
+        clean = {k: v for k, v in body.items() if k in allowed}
+        p.write_text(_j.dumps(clean, ensure_ascii=False, indent=2))
+        return {"status": "saved", "settings": clean}
+
+    log.info("Dashboard routes registered")

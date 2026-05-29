@@ -1,0 +1,5 @@
+# Requirements for hyperion_engine_v12
+fastapi
+uvicorn
+jinja2
+python-dotenv

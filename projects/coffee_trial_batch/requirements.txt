@@ -1,0 +1,3 @@
+# Requirements for coffee_trial_batch
+python-dotenv
+httpx

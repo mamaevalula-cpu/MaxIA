@@ -1,0 +1,1477 @@
+# -*- coding: utf-8 -*-
+"""
+brain/llm_router.py — Умный маршрутизатор LLM-запросов (10 провайдеров).
+
+Поддерживаемые провайдеры:
+  1. OpenAI      — GPT-4o, o3, o4-mini
+  2. Claude      — Opus 4.5, Sonnet 4.5, Haiku 3.5
+  3. Gemini      — 2.5 Pro, 2.5 Flash
+  4. Grok        — Grok 3, Grok 3 Mini (xAI)
+  5. DeepSeek    — R1 (reasoner), V3 (chat)
+  6. Groq        — Llama 4, Llama 3.3, Mixtral (быстрый inference)
+  7. Together    — Llama 4, Qwen 3, Mistral Large
+  8. Mistral     — Large, Small (native API)
+  9. Perplexity  — Sonar online (поиск)
+  10. Ollama     — локальные модели
+
+Умное переключение:
+  - ModelProfiler выбирает лучший провайдер по задаче и реальной статистике
+  - Ensemble mode: несколько моделей параллельно → синтез лучшего ответа
+  - Automatic fallback при ошибках / исчерпании лимитов
+  - Запись метрик в ModelProfiler после каждого вызова
+"""
+
+from __future__ import annotations
+
+# ══════════════════════════════════════════════════════════════
+# COST TIERS (lower = cheaper)
+# tier 1: free/very cheap (groq, together, ollama)
+# tier 2: cheap (deepseek, mistral)
+# tier 3: medium (openai gpt-4o-mini, claude-haiku)
+# tier 4: expensive (claude-opus, gpt-4o, grok)
+# ══════════════════════════════════════════════════════════════
+PROVIDER_COST_TIER = {
+    "groq":       1,  # Free tier - llama3.3 70B
+    "ollama":     1,  # Local - free
+    "together":   1,  # $0.2/M tokens
+    "deepseek":   2,  # $0.55/M tokens (R1)
+    "mistral":    2,  # $1/M tokens
+    "openai":     3,  # $2.50/M gpt-4o-mini, $10/M gpt-4o
+    "gemini":     2,  # $0.30/M flash, $1.25/M pro
+    "grok":       3,  # $2/M tokens
+    "perplexity": 2,  # $1/M tokens
+    "claude":     4,  # $3/M sonnet, $15/M opus
+}
+
+# Token budget per task type (approximate tokens to spend)
+TASK_TOKEN_BUDGET = {
+    "chat":     500,   # Simple chat - cheap
+    "fast":     200,   # Classification - very cheap
+    "classify": 200,
+    "code":     2000,  # Code gen - medium
+    "analysis": 4000,  # Analysis - can be expensive
+    "trading":  1000,  # Trading - medium
+    "math":     2000,  # Math - medium
+    "creative": 3000,  # Creative - medium
+    "agent":    4000,  # Agent loops - can be expensive
+    "reasoning":4000,
+    "news":     1000,
+    "image":    500,
+}
+
+import json
+import logging
+import re
+import threading
+import time
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
+
+import httpx
+
+from core.config import LLMProvider, cfg
+try:
+    from core.governance import gov as _llm_gov
+except ImportError:
+    class _GovStub:
+        def record_token_usage(self, **kw): pass
+    _llm_gov = _GovStub()
+gov = _llm_gov
+
+log = logging.getLogger("brain.llm_router")
+
+
+# ── Dataclasses ───────────────────────────────────────────────────────────────
+
+@dataclass
+class LLMRequest:
+    messages: List[Dict[str, str]]
+    system: str = ""
+    max_tokens: int = 2000
+    temperature: float = 0.7
+    task_type: str = "general"   # code | analysis | math | trading | creative | news | fast | image | chat | general
+    preferred_provider: Optional[LLMProvider] = None
+    require_quality: bool = False  # True → ensemble / лучший провайдер
+    preferred_model: Optional[str] = None  # Конкретная модель (override)
+
+
+@dataclass
+class LLMResponse:
+    content: str
+    provider: LLMProvider
+    model: str
+    tokens_used: int = 0
+    latency_ms: float = 0.0
+    success: bool = True
+    error: str = ""
+
+
+@dataclass
+class ProviderStatus:
+    provider: LLMProvider
+    available: bool = True
+    tokens_exhausted: bool = False
+    rate_limited: bool = False
+    last_error: str = ""
+    last_check: float = 0.0
+    cooldown_until: float = 0.0
+
+
+# ── Исключения ────────────────────────────────────────────────────────────────
+
+class TokensExhaustedError(Exception):
+    pass
+
+
+class RateLimitError(Exception):
+    pass
+
+
+# ── Главный класс ─────────────────────────────────────────────────────────────
+
+
+# ── Subordinate Agent System Prompts (APEX AI delegation protocol) ────────────
+_DEEPSEEK_DELEGATE_SYSTEM = """Ты — DeepSeek-R1, аналитический движок системы APEX AI.
+
+РЕЖИМ МЫШЛЕНИЯ:
+1. Сначала думай внутри <think>…</think> — разложи задачу на шаги
+2. Проверь каждый шаг на логические противоречия
+3. Выдай финальный ответ в чистом Markdown
+
+ПРАВИЛА:
+- Код: только рабочий, с обработкой ошибок, type hints, docstring
+- Математика: показывай промежуточные шаги
+- Анализ: факты → вывод → рекомендация
+- Формат ответа: заголовки, списки, блоки кода — всегда структурировано
+- Язык: отвечай на языке вопроса
+- Никаких деструктивных операций (DROP, DELETE, rm -rf) без явного подтверждения"""
+
+_GROQ_DELEGATE_SYSTEM = """Ты — быстрый агент APEX AI (Llama/Groq).
+
+РЕЖИМ: скорость + точность.
+- Отвечай на языке пользователя
+- Конкретно и без воды — только суть
+- Если задача требует кода: дай рабочий фрагмент
+- Если задача требует рассуждения: THINK→ANSWER в 2-3 предложения
+- Короткие вопросы → короткие ответы; длинные → структурируй"""
+
+_CLAUDE_DELEGATE_SYSTEM = """Ты — Claude, старший инженер и аналитик системы APEX AI.
+
+ПОДХОД:
+- Сначала убедись что понял задачу правильно (1 строка)
+- Предложи 2-3 подхода если есть выбор архитектуры
+- Реализуй лучший вариант полностью
+- Production-ready: error handling, logging, тесты где нужно
+- Честно говори если чего-то не знаешь
+
+ФОРМАТ: чистый Markdown, код в ```python блоках, без лишних слов"""
+
+class LLMRouter:
+    """
+    Умный маршрутизатор LLM — единая точка входа для всех AI-запросов.
+    Singleton. Поддерживает 10 провайдеров и умный выбор по задаче.
+    """
+
+    _instance: Optional["LLMRouter"] = None
+    _lock = threading.Lock()
+
+    def __init__(self) -> None:
+        self._statuses: Dict[LLMProvider, ProviderStatus] = {
+            p: ProviderStatus(provider=p) for p in LLMProvider
+        }
+        self._rlock = threading.RLock()
+        # One shared client for external HTTPS APIs (SSL always on)
+        self._http = self._make_http_client(verify_ssl=True)
+        # Separate client for local endpoints (ollama etc.) without SSL
+        self._http_local = self._make_http_client(verify_ssl=False)
+        self._ollama_available: Optional[bool] = None
+        # Provider performance stats for intelligent routing
+        self._provider_stats: Dict[LLMProvider, Dict] = {
+            p: {"last_success_time": 0.0, "error_count": 0, "avg_latency_ms": 0.0, "call_count": 0}
+            for p in LLMProvider
+        }
+        # ── Cost tracking & daily cap ─────────────────────────────────────────
+        self._daily_cost_usd: float = 0.0
+        self._daily_cost_date: str = ""
+        self._daily_cost_limit: float = 1.0   # $1/day hard cap
+        self._groq_only_mode: bool = False
+        # Cost per 1M tokens (blended input+output estimate)
+        self._model_costs: Dict[str, float] = {
+            "groq":       0.0,    # Free tier
+            "ollama":     0.0,    # Local — free
+            "together":   0.20,   # $0.20/M
+            "deepseek":   0.55,   # $0.55/M (R1)
+            "mistral":    1.0,    # $1/M
+            "gemini":     0.60,   # Flash blended
+            "perplexity": 1.0,    # $1/M
+            "openai":     5.0,    # $5/M blended
+            "grok":       2.0,    # $2/M
+            "claude":     9.0,    # $9/M blended (3 in + 15 out)
+        }
+        log.info("LLMRouter initialised (10 providers)")
+
+    @staticmethod
+    def _make_http_client(verify_ssl: bool = True) -> httpx.Client:
+        """
+        Создать httpx клиент. SSL всегда включён на Linux/production.
+        verify_ssl=False только для localhost/private endpoints.
+        """
+        try:
+            import certifi
+            return httpx.Client(
+                timeout=httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=5.0),
+                verify=certifi.where() if verify_ssl else False,
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+                http2=False,
+            )
+        except Exception:
+            return httpx.Client(
+                timeout=httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=5.0),
+                verify=verify_ssl,
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            )
+
+    @classmethod
+    def get(cls) -> "LLMRouter":
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls()
+        return cls._instance
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ПУБЛИЧНЫЕ МЕТОДЫ
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def ask(self, request: LLMRequest) -> LLMResponse:
+        """
+        Основной метод. Автоматически выбирает лучший провайдер по задаче.
+        При ошибке — переключается на следующий в цепочке.
+        Использует ResponseCache для идентичных запросов.
+        """
+        # ── Groq-only mode when daily cost cap is reached ─────────────────────
+        if self._groq_only_mode and not getattr(request, "_no_ensemble", False):
+            # Force cheap providers — override preferred_provider
+            _orig_preferred = request.preferred_provider
+            if request.preferred_provider not in (
+                LLMProvider.GROQ, LLMProvider.DEEPSEEK, LLMProvider.TOGETHER
+            ):
+                request.preferred_provider = None  # let chain builder pick cheap ones
+
+        # Ensemble для сложных задач
+        if request.require_quality and not getattr(request, "_no_ensemble", False):
+            # Gate: only run ensemble if message is long (>300 chars) and not a chat/fast task
+            user_msg_len = len(request.messages[-1].get("content", "")) if request.messages else 0
+            if user_msg_len < 300 or request.task_type in ("chat", "fast", "classify"):
+                # Downgrade: skip ensemble, just do a normal call
+                request.require_quality = False
+            else:
+                return self._ask_ensemble(request)
+
+        # ── Проверка кэша ──────────────────────────────────────────────────────
+        user_text = request.messages[-1].get("content", "") if request.messages else ""
+        _cache_hit = False
+        try:
+            from core.response_cache import ResponseCache
+            _rc = ResponseCache.get()
+            cached = _rc.lookup(user_text, task_type=request.task_type)
+            if cached:
+                log.debug("LLM cache HIT [%s] — skipping provider call", request.task_type)
+                try:
+                    from monitoring.metrics import metrics
+                    metrics.llm_call(provider="cache", task_type=request.task_type,
+                                     tokens=0, latency_ms=0, success=True, from_cache=True)
+                except Exception:
+                    pass
+                return LLMResponse(
+                    content=cached,
+                    provider=LLMProvider.OLLAMA,   # sentinel "from_cache"
+                    model="cache",
+                    tokens_used=0,
+                    latency_ms=0.0,
+                    success=True,
+                )
+        except Exception:
+            _rc = None  # кэш недоступен — продолжаем без него
+        else:
+            _rc = _rc  # noqa: keeps reference for set() call below
+
+        providers = self._build_priority_chain(request)
+        last_error = ""
+
+        for provider in providers:
+            if not self._is_available(provider):
+                log.debug("Skip %s (unavailable/cooldown)", provider.value)
+                continue
+
+            t0 = time.time()
+            try:
+                content, model, tokens = self._call(provider, request)
+                latency = (time.time() - t0) * 1000
+                self._mark_success(provider)
+                # Запись в ModelProfiler
+                self._record_profiler(provider, model, request.task_type,
+                                      content, user_text, latency, True)
+                log.info("LLM: %s/%s → %d tokens, %.0fms",
+                         provider.value, model, tokens, latency)
+
+                # ── Governance token reporting ────────────────────────────
+                try:
+                    gov.record_token_usage(tokens_used=tokens, provider=provider.value)
+                except Exception:
+                    pass
+
+                # ── Daily cost tracking ───────────────────────────────────────
+                try:
+                    today = time.strftime('%Y-%m-%d')
+                    if self._daily_cost_date != today:
+                        self._daily_cost_usd = 0.0
+                        self._daily_cost_date = today
+                        self._groq_only_mode = False
+                    provider_name = provider.value if hasattr(provider, 'value') else str(provider)
+                    cost_per_m = self._model_costs.get(provider_name, 1.0)
+                    call_cost = (tokens / 1_000_000) * cost_per_m
+                    self._daily_cost_usd += call_cost
+                    if self._daily_cost_usd > self._daily_cost_limit and not self._groq_only_mode:
+                        self._groq_only_mode = True
+                        log.warning(
+                            "[COST CAP] Daily limit $%.2f reached! Switching to Groq-only mode. "
+                            "Spent today: $%.4f",
+                            self._daily_cost_limit, self._daily_cost_usd
+                        )
+                except Exception:
+                    pass
+
+                # ── Метрики ──────────────────────────────────────────────────
+                try:
+                    from monitoring.metrics import metrics
+                    metrics.llm_call(provider=provider.value, task_type=request.task_type,
+                                     tokens=tokens, latency_ms=latency, success=True)
+                except Exception:
+                    pass
+
+                # ── Сохранить в кэш ───────────────────────────────────────────
+                try:
+                    if _rc and user_text:
+                        _rc.set(user_text, content, task_type=request.task_type)
+                except Exception:
+                    pass
+
+                return LLMResponse(
+                    content=content, provider=provider, model=model,
+                    tokens_used=tokens, latency_ms=latency, success=True
+                )
+            except TokensExhaustedError as e:
+                log.warning("%s tokens exhausted: %s", provider.value, e)
+                self._mark_tokens_exhausted(provider)
+                last_error = str(e)
+                try:
+                    from monitoring.metrics import metrics
+                    metrics.llm_call(provider=provider.value, task_type=request.task_type,
+                                     success=False)
+                except Exception:
+                    pass
+            except RateLimitError as e:
+                log.warning("%s rate limited: %s", provider.value, e)
+                self._mark_rate_limited(provider, cooldown=60)
+                last_error = str(e)
+                try:
+                    from monitoring.metrics import metrics
+                    metrics.llm_call(provider=provider.value, task_type=request.task_type,
+                                     success=False)
+                except Exception:
+                    pass
+            except Exception as e:
+                log.warning("%s call failed: %s", provider.value, e)
+                self._mark_error(provider, str(e))
+                last_error = str(e)
+                try:
+                    from monitoring.metrics import metrics
+                    metrics.llm_call(provider=provider.value, task_type=request.task_type,
+                                     success=False)
+                    metrics.record_error(f"llm:{provider.value}")
+                except Exception:
+                    pass
+
+        return LLMResponse(
+            content="", provider=LLMProvider.OLLAMA, model="none",
+            success=False, error=last_error or "Все провайдеры недоступны"
+        )
+
+    def ask_simple(self, prompt: str, system: str = "",
+                   task_type: str = "general",
+                   require_quality: bool = False) -> str:
+        """Упрощённый вызов. Возвращает строку ответа."""
+        req = LLMRequest(
+            messages=[{"role": "user", "content": prompt}],
+            system=system,
+            task_type=task_type,
+            require_quality=require_quality,
+        )
+        resp = self.ask(req)
+        return resp.content
+
+    def ask_fast(self, prompt: str, system: str = "",
+                 task_type: str = "classify") -> str:
+        """Быстрый вызов — использует deepseek-chat / groq для классификации."""
+        req = LLMRequest(
+            messages=[{"role": "user", "content": prompt}],
+            system=system,
+            task_type=task_type,
+            max_tokens=500,
+            temperature=0.1,
+        )
+        req._fast_task = True  # type: ignore[attr-defined]
+        resp = self.ask(req)
+        return resp.content
+
+    def ask_parallel(self, requests: List[LLMRequest]) -> List[LLMResponse]:
+        """Параллельные вызовы через ThreadPoolExecutor."""
+        import concurrent.futures
+        results: List[LLMResponse] = [None] * len(requests)  # type: ignore
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(requests), 6)) as ex:
+            futures = {ex.submit(self.ask, req): i for i, req in enumerate(requests)}
+            for fut in concurrent.futures.as_completed(futures):
+                idx = futures[fut]
+                try:
+                    results[idx] = fut.result()
+                except Exception as e:
+                    results[idx] = LLMResponse(
+                        content="", provider=LLMProvider.OLLAMA,
+                        model="none", success=False, error=str(e)
+                    )
+        return results
+
+    def ask_ensemble(self, prompt: str, system: str = "",
+                     task_type: str = "analysis",
+                     providers: Optional[List[LLMProvider]] = None) -> str:
+        """
+        Публичный ensemble: спрашивает несколько моделей, синтезирует лучший ответ.
+        Использовать для важных вопросов где нужна максимальная точность.
+        """
+        req = LLMRequest(
+            messages=[{"role": "user", "content": prompt}],
+            system=system,
+            task_type=task_type,
+            require_quality=True,
+        )
+        if providers:
+            req.preferred_provider = providers[0]
+        resp = self._ask_ensemble(req)
+        return resp.content
+
+    async def complete(
+        self,
+        prompt: str,
+        system: str = "",
+        task_type: str = "agent",
+        model: Optional[str] = None,
+        max_tokens: int = 4096,
+    ) -> str:
+        """
+        Async wrapper around ask_simple for use with asyncio callers
+        (e.g. AgentHarness). Runs the sync call in a thread executor.
+        """
+        import asyncio
+        preferred = None
+        if model:
+            try:
+                from core.config import LLMProvider as _P
+                preferred = _P(model)
+            except (ValueError, ImportError):
+                pass
+        req = LLMRequest(
+            messages=[{"role": "user", "content": prompt}],
+            system=system,
+            max_tokens=max_tokens,
+            temperature=0.3,
+            task_type=task_type,
+            preferred_provider=preferred,
+        )
+        loop = asyncio.get_running_loop()
+        resp = await loop.run_in_executor(None, self.ask, req)
+        if resp.success and resp.content:
+            return resp.content
+        raise RuntimeError(resp.error or "LLMRouter: empty response")
+
+    def score_quality(self, response: str, question: str,
+                      min_length: int = 50) -> float:
+        """
+        Оценить качество ответа (0.0 — плохо, 1.0 — хорошо).
+        Быстрая эвристика без LLM-вызова.
+        """
+        if not response or len(response) < min_length:
+            return 0.1
+        score = 0.5
+        if len(response) > 200:
+            score += 0.1
+        if len(response) > 500:
+            score += 0.1
+        if any(c in response for c in ["##", "**", "```", "1.", "- "]):
+            score += 0.1
+        refuse_words = ["не могу", "не имею доступа", "я не в состоянии",
+                        "cannot", "don't have access", "i'm unable"]
+        if any(w in response.lower() for w in refuse_words):
+            score -= 0.3
+        q_words = set(question.lower().split())
+        r_words = set(response.lower().split())
+        overlap = len(q_words & r_words) / max(len(q_words), 1)
+        score += min(0.2, overlap * 0.5)
+        return max(0.0, min(1.0, score))
+
+    def status_report(self) -> Dict[str, Any]:
+        """Получить отчёт о состоянии всех провайдеров."""
+        report = {}
+        for p, s in self._statuses.items():
+            available = self._is_available(p)
+            report[p.value] = {
+                "available": available,
+                "configured": bool({
+                    "openai": __import__('os').getenv('OPENAI_API_KEY'),
+                    "claude": __import__('os').getenv('ANTHROPIC_API_KEY'),
+                    "gemini": __import__('os').getenv('GEMINI_API_KEY'),
+                    "grok": __import__('os').getenv('GROK_API_KEY'),
+                    "deepseek": __import__('os').getenv('DEEPSEEK_API_KEY'),
+                    "groq": __import__('os').getenv('GROQ_API_KEY'),
+                    "together": __import__('os').getenv('TOGETHER_API_KEY'),
+                    "mistral": __import__('os').getenv('MISTRAL_API_KEY'),
+                    "perplexity": __import__('os').getenv('PERPLEXITY_API_KEY'),
+                    "ollama": "local",
+                }.get(p.value if hasattr(p,"value") else str(p), "")),
+                "tokens_exhausted": s.tokens_exhausted,
+                "rate_limited": s.rate_limited,
+                "cooldown_sec": max(0, s.cooldown_until - time.time()),
+                "last_error": s.last_error[:100] if s.last_error else "",
+            }
+        return report
+
+    def reset_provider(self, provider: LLMProvider) -> None:
+        """Сбросить статус провайдера (например, после пополнения токенов)."""
+        self._mark_success(provider)
+        log.info("Provider %s status reset", provider.value)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ENSEMBLE
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _ask_ensemble(self, request: LLMRequest) -> LLMResponse:
+        """
+        Ensemble: запросить 2-3 модели параллельно, синтезировать лучший ответ.
+        """
+        import concurrent.futures
+
+        # Выбрать топ-3 провайдера для задачи
+        chain = self._build_priority_chain(request)
+        available_chain = [p for p in chain if self._is_available(p)][:3]
+
+        if len(available_chain) < 2:
+            # Мало провайдеров — обычный вызов
+            request._no_ensemble = True  # type: ignore[attr-defined]
+            return self.ask(request)
+
+        log.info("Ensemble: querying %s in parallel",
+                 [p.value for p in available_chain])
+
+        # Создаём копии запросов без ensemble флага
+        sub_requests = []
+        for p in available_chain:
+            r = LLMRequest(
+                messages=request.messages,
+                system=request.system,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+                task_type=request.task_type,
+                preferred_provider=p,
+                require_quality=False,
+            )
+            r._no_ensemble = True  # type: ignore[attr-defined]
+            sub_requests.append(r)
+
+        responses = self.ask_parallel(sub_requests)
+        successful = [r for r in responses if r.success and r.content]
+
+        if not successful:
+            return LLMResponse(
+                content="", provider=LLMProvider.OLLAMA, model="none",
+                success=False, error="Ensemble: все провайдеры не ответили"
+            )
+
+        if len(successful) == 1:
+            return successful[0]
+
+        # Синтез: выбрать лучший ответ или скомбинировать
+        question = request.messages[-1].get("content", "")
+        best = max(successful, key=lambda r: self.score_quality(r.content, question))
+
+        # Если разброс качества большой — синтезируем через DeepSeek
+        scores = [self.score_quality(r.content, question) for r in successful]
+        if max(scores) - min(scores) > 0.2 and len(successful) >= 2:
+            synthesis = self._synthesize_responses(
+                question, request.system, successful[:3]
+            )
+            if synthesis:
+                best = LLMResponse(
+                    content=synthesis,
+                    provider=best.provider,
+                    model=f"ensemble({'+'.join(r.model for r in successful[:3])})",
+                    tokens_used=sum(r.tokens_used for r in successful),
+                    latency_ms=max(r.latency_ms for r in successful),
+                    success=True,
+                )
+
+        log.info("Ensemble result: %s (score=%.2f)",
+                 best.model, self.score_quality(best.content, question))
+        return best
+
+    def _synthesize_responses(self, question: str, system: str,
+                               responses: List[LLMResponse]) -> str:
+        """Синтезировать несколько ответов в один лучший."""
+        parts = []
+        for i, r in enumerate(responses, 1):
+            parts.append(f"[Ответ {i} от {r.model}]:\n{r.content[:1500]}")
+
+        synthesis_prompt = (
+            f"Вопрос пользователя: {question}\n\n"
+            f"Получены следующие ответы от разных AI-моделей:\n\n"
+            + "\n\n---\n\n".join(parts) +
+            "\n\n---\n\n"
+            "Синтезируй наилучший, самый полный и точный ответ, объединив сильные стороны "
+            "каждого ответа. Убери повторы. Отвечай напрямую на вопрос."
+        )
+
+        synth_req = LLMRequest(
+            messages=[{"role": "user", "content": synthesis_prompt}],
+            system=system or "Ты эксперт-синтезатор. Создавай точные, структурированные ответы.",
+            max_tokens=2000,
+            temperature=0.3,
+            task_type="analysis",
+            preferred_provider=LLMProvider.DEEPSEEK,
+        )
+        synth_req._no_ensemble = True  # type: ignore[attr-defined]
+        resp = self.ask(synth_req)
+        return resp.content if resp.success else ""
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ПОСТРОЕНИЕ ЦЕПОЧКИ ПРОВАЙДЕРОВ
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _build_priority_chain(self, request: LLMRequest) -> List[LLMProvider]:
+        """
+        Построить упорядоченный список провайдеров для запроса.
+        Использует ModelProfiler для учёта реальной статистики.
+        """
+        if request.preferred_provider:
+            chain = [request.preferred_provider]
+            fallbacks = [
+                LLMProvider.DEEPSEEK, LLMProvider.CLAUDE, LLMProvider.OPENAI,
+                LLMProvider.GEMINI, LLMProvider.GROK, LLMProvider.GROQ,
+                LLMProvider.TOGETHER, LLMProvider.MISTRAL,
+                LLMProvider.PERPLEXITY, LLMProvider.OLLAMA,
+            ]
+            for p in fallbacks:
+                if p != request.preferred_provider:
+                    chain.append(p)
+            return chain
+
+        # Для быстрых и chat задач — всегда Groq первым (0.14s vs 5s DeepSeek)
+        if request.task_type in ("chat", "fast", "classify"):
+            return self._static_chain(request)
+
+        # Пробуем использовать ModelProfiler для умного выбора
+        profiler_chain = self._get_profiler_chain(request.task_type)
+        if profiler_chain:
+            # Добавляем fallback провайдеры
+            used = set(profiler_chain)
+            all_fallbacks = [
+                LLMProvider.GROQ,      # Always include Groq as fast fallback
+                LLMProvider.DEEPSEEK, LLMProvider.CLAUDE, LLMProvider.OPENAI,
+                LLMProvider.GEMINI, LLMProvider.GROK,
+                LLMProvider.TOGETHER, LLMProvider.MISTRAL,
+                LLMProvider.PERPLEXITY, LLMProvider.OLLAMA,
+            ]
+            for p in all_fallbacks:
+                if p not in used:
+                    profiler_chain.append(p)
+            return profiler_chain
+
+        # Статические цепочки по типу задачи
+        return self._static_chain(request)
+
+    def _get_profiler_chain(self, task_type: str) -> List[LLMProvider]:
+        """Получить цепочку провайдеров из ModelProfiler."""
+        try:
+            from brain.model_profiler import ModelProfiler
+            profiler = ModelProfiler.get()
+            # Передаём все провайдеры с ключами как доступные
+            available = [p.value for p in LLMProvider if self._is_available(p)]
+            if not available:
+                return []
+            best = profiler.get_best_providers(task_type, available_providers=available)
+            result = []
+            seen: set = set()
+            for provider_name, _model in best:
+                try:
+                    p = LLMProvider(provider_name)
+                    if p not in seen:
+                        result.append(p)
+                        seen.add(p)
+                except ValueError:
+                    pass
+            return result
+        except Exception:
+            return []
+
+    def _static_chain(self, request: LLMRequest) -> List[LLMProvider]:
+        """Статическая цепочка приоритетов по типу задачи."""
+        fast_task = getattr(request, "_fast_task", False)
+
+        # chat tasks: prefer cheap providers first
+        if request.task_type == "chat":
+            return [
+                LLMProvider.GROQ,        # Cheapest + fastest
+                LLMProvider.DEEPSEEK,    # Cheap + quality
+                LLMProvider.TOGETHER,    # Good free tier
+                LLMProvider.MISTRAL,
+                LLMProvider.CLAUDE,      # Expensive, use as fallback
+                LLMProvider.OPENAI,
+                LLMProvider.GEMINI,
+                LLMProvider.OLLAMA,
+            ]
+
+        if fast_task or request.task_type in ("classify", "fast"):
+            return [
+                LLMProvider.GROQ,        # Быстрее всего
+                LLMProvider.DEEPSEEK,
+                LLMProvider.TOGETHER,
+                LLMProvider.MISTRAL,
+                LLMProvider.OLLAMA,
+            ]
+
+        if request.task_type == "code":
+            return [
+                LLMProvider.DEEPSEEK,    # R1 лучший для кода
+                LLMProvider.OPENAI,      # o3/o4-mini
+                LLMProvider.CLAUDE,      # Sonnet хорош для кода
+                LLMProvider.TOGETHER,    # Qwen3
+                LLMProvider.GROQ,
+                LLMProvider.MISTRAL,
+                LLMProvider.GEMINI,
+                LLMProvider.OLLAMA,
+            ]
+
+        if request.task_type == "analysis" or request.require_quality:
+            return [
+                LLMProvider.DEEPSEEK,    # R1 — отличный анализ, дешевле
+                LLMProvider.GEMINI,      # 2.5 Pro — хорошее качество
+                LLMProvider.GROQ,        # Быстро + бесплатно
+                LLMProvider.TOGETHER,
+                LLMProvider.MISTRAL,
+                LLMProvider.PERPLEXITY,
+                LLMProvider.OPENAI,      # o3 — дорого
+                LLMProvider.GROK,
+                LLMProvider.CLAUDE,      # Дорого — последний резерв
+                LLMProvider.OLLAMA,
+            ]
+
+        if request.task_type == "math":
+            return [
+                LLMProvider.DEEPSEEK,    # R1 — SOTA на math
+                LLMProvider.OPENAI,      # o3 reasoning
+                LLMProvider.GEMINI,
+                LLMProvider.CLAUDE,
+                LLMProvider.GROQ,
+                LLMProvider.OLLAMA,
+            ]
+
+        if request.task_type == "trading":
+            return [
+                LLMProvider.DEEPSEEK,
+                LLMProvider.GROK,        # Grok 3 — real-time финансы
+                LLMProvider.GROQ,        # Быстрый
+                LLMProvider.CLAUDE,
+                LLMProvider.OPENAI,
+                LLMProvider.OLLAMA,
+            ]
+
+        if request.task_type == "creative":
+            return [
+                LLMProvider.CLAUDE,      # Claude лучший для творчества
+                LLMProvider.OPENAI,
+                LLMProvider.GEMINI,
+                LLMProvider.GROK,
+                LLMProvider.MISTRAL,
+                LLMProvider.TOGETHER,
+                LLMProvider.GROQ,
+                LLMProvider.OLLAMA,
+            ]
+
+        if request.task_type in ("agent", "reasoning"):
+            return [
+                LLMProvider.DEEPSEEK,    # R1 reasoning — дешевле Claude
+                LLMProvider.GROQ,        # Быстро + бесплатно
+                LLMProvider.GEMINI,
+                LLMProvider.TOGETHER,
+                LLMProvider.MISTRAL,
+                LLMProvider.OPENAI,      # o3/o4-mini
+                LLMProvider.GROK,
+                LLMProvider.CLAUDE,      # Дорого — последний резерв
+                LLMProvider.OLLAMA,
+            ]
+
+        if request.task_type == "news":
+            return [
+                LLMProvider.PERPLEXITY,  # Online search
+                LLMProvider.GROK,        # Real-time данные
+                LLMProvider.DEEPSEEK,
+                LLMProvider.GROQ,
+                LLMProvider.CLAUDE,
+                LLMProvider.OLLAMA,
+            ]
+
+        if request.task_type == "image":
+            return [
+                LLMProvider.CLAUDE,      # Vision
+                LLMProvider.OPENAI,      # GPT-4o vision
+                LLMProvider.GEMINI,      # Gemini multimodal
+                LLMProvider.GROK,
+            ]
+
+        # Обычный чат / general — DeepSeek first, Claude last resort
+        return [
+            LLMProvider.DEEPSEEK,    # Качество + дёшево
+            LLMProvider.GROQ,        # Быстро + бесплатно
+            LLMProvider.GEMINI,
+            LLMProvider.TOGETHER,
+            LLMProvider.MISTRAL,
+            LLMProvider.PERPLEXITY,
+            LLMProvider.OPENAI,
+            LLMProvider.GROK,
+            LLMProvider.CLAUDE,      # Дорого — последний резерв
+            LLMProvider.OLLAMA,
+        ]
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # DISPATCH ВЫЗОВОВ
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _call(self, provider: LLMProvider,
+              request: LLMRequest) -> Tuple[str, str, int]:
+        """Вызов конкретного провайдера. Возвращает (content, model, tokens)."""
+        dispatch = {
+            LLMProvider.OPENAI:     self._call_openai,
+            LLMProvider.CLAUDE:     self._call_claude,
+            LLMProvider.GEMINI:     self._call_gemini,
+            LLMProvider.GROK:       self._call_grok,
+            LLMProvider.DEEPSEEK:   self._call_deepseek,
+            LLMProvider.GROQ:       self._call_groq,
+            LLMProvider.TOGETHER:   self._call_together,
+            LLMProvider.MISTRAL:    self._call_mistral,
+            LLMProvider.PERPLEXITY: self._call_perplexity,
+            LLMProvider.OLLAMA:     self._call_ollama,
+        }
+        fn = dispatch.get(provider)
+        if fn is None:
+            raise ValueError(f"Unknown provider: {provider}")
+        return fn(request)
+
+    def _build_messages(self, request: LLMRequest) -> List[Dict]:
+        """Собрать список сообщений с системным промптом."""
+        msgs = list(request.messages)
+        if request.system:
+            msgs = [{"role": "system", "content": request.system}] + msgs
+        return msgs
+
+    def _select_model(self, provider: LLMProvider, request: LLMRequest,
+                      default: str) -> str:
+        """Выбрать оптимальную модель провайдера под задачу."""
+        if request.preferred_model:
+            return request.preferred_model
+        try:
+            from brain.model_profiler import TASK_MODEL_MATRIX
+            task = request.task_type
+            provider_name = provider.value
+            if task in TASK_MODEL_MATRIX:
+                for prov, model in TASK_MODEL_MATRIX[task]:
+                    if prov == provider_name:
+                        return model
+        except Exception:
+            pass
+        return default
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ПРОВАЙДЕР: OPENAI
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _call_openai(self, request: LLMRequest) -> Tuple[str, str, int]:
+        if not cfg.openai_api_key:
+            raise RuntimeError("No OpenAI API key (OPENAI_API_KEY)")
+
+        fast_task = getattr(request, "_fast_task", False)
+        default_model = cfg.openai_model  # gpt-4o
+
+        if fast_task or request.task_type == "classify":
+            model = "gpt-4o-mini"
+        elif request.task_type in ("code", "math", "analysis") and not fast_task:
+            model = self._select_model(LLMProvider.OPENAI, request, "o4-mini")
+        else:
+            model = self._select_model(LLMProvider.OPENAI, request, default_model)
+
+        # o3/o4 не поддерживают system role — переносим в первое user сообщение
+        is_reasoning = model in ("o3", "o4-mini", "o3-mini", "o1", "o1-mini")
+        if is_reasoning and request.system:
+            msgs = list(request.messages)
+            if msgs and msgs[0].get("role") == "user":
+                msgs[0] = {
+                    "role": "user",
+                    "content": f"{request.system}\n\n{msgs[0]['content']}"
+                }
+        else:
+            msgs = self._build_messages(request)
+
+        payload: Dict[str, Any] = {
+            "model": model,
+            "messages": msgs,
+        }
+        if not is_reasoning:
+            payload["temperature"] = request.temperature
+            payload["max_tokens"] = request.max_tokens
+        else:
+            payload["max_completion_tokens"] = request.max_tokens
+
+        r = self._http.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {cfg.openai_api_key}",
+                     "Content-Type": "application/json"},
+            json=payload, timeout=120
+        )
+        data = r.json()
+        if r.status_code == 429:
+            raise RateLimitError(f"OpenAI rate limit: {data.get('error', {}).get('message', '')}")
+        if r.status_code in (402, 403) or "insufficient_quota" in str(data):
+            raise TokensExhaustedError("OpenAI: insufficient quota")
+        r.raise_for_status()
+        content = data["choices"][0]["message"]["content"] or ""
+        tokens = data.get("usage", {}).get("total_tokens", 0)
+        return content, model, tokens
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ПРОВАЙДЕР: CLAUDE (ANTHROPIC)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _call_claude(self, request: LLMRequest) -> Tuple[str, str, int]:
+        if not cfg.claude_api_key:
+            raise RuntimeError("No Claude API key (ANTHROPIC_API_KEY)")
+
+        fast_task = getattr(request, "_fast_task", False)
+        if fast_task:
+            model = "claude-opus-4-7"
+        elif request.task_type in ("analysis", "creative"):
+            model = self._select_model(LLMProvider.CLAUDE, request, "claude-opus-4-7")
+        else:
+            model = self._select_model(LLMProvider.CLAUDE, request,
+                                       cfg.claude_model)  # claude-sonnet-4-6
+
+        msgs = [m for m in request.messages if m.get("role") != "system"]
+        payload: Dict[str, Any] = {
+            "model": model,
+            "max_tokens": request.max_tokens,
+            "messages": msgs,
+        }
+        if request.system:
+            payload["system"] = request.system
+        if model not in ("claude-opus-4-7",):
+            payload["temperature"] = request.temperature
+
+        r = self._http.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": cfg.claude_api_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            json=payload, timeout=120
+        )
+        data = r.json()
+        if r.status_code == 429:
+            raise RateLimitError("Claude: rate limit")
+        if r.status_code in (402, 403):
+            raise TokensExhaustedError(
+                f"Claude: {data.get('error', {}).get('message', 'quota exceeded')}")
+        if r.status_code == 400:
+            err = data.get('error', {})
+            msg = err.get('message', '')
+            if any(k in msg.lower() for k in ('credit', 'billing', 'balance', 'quota')):
+                raise TokensExhaustedError(f"Claude: {msg}")
+            raise RuntimeError(f"Claude 400: {msg or data}")
+        r.raise_for_status()
+        content = data["content"][0]["text"]
+        tokens = (data.get("usage", {}).get("input_tokens", 0) +
+                  data.get("usage", {}).get("output_tokens", 0))
+        return content, model, tokens
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ПРОВАЙДЕР: GOOGLE GEMINI
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _call_gemini(self, request: LLMRequest) -> Tuple[str, str, int]:
+        if not cfg.gemini_api_key:
+            raise RuntimeError("No Gemini API key (GOOGLE_API_KEY / GEMINI_API_KEY)")
+
+        fast_task = getattr(request, "_fast_task", False)
+        if fast_task:
+            model = "gemini-2.5-flash-preview-05-20"
+        else:
+            model = self._select_model(
+                LLMProvider.GEMINI, request,
+                cfg.gemini_model  # gemini-2.5-flash-preview-05-20
+            )
+
+        # Gemini REST API v1beta
+        # Конвертируем сообщения в формат Gemini
+        contents = []
+        for m in request.messages:
+            role = "user" if m["role"] == "user" else "model"
+            contents.append({"role": role, "parts": [{"text": m["content"]}]})
+
+        payload: Dict[str, Any] = {
+            "contents": contents,
+            "generationConfig": {
+                "maxOutputTokens": request.max_tokens,
+                "temperature": request.temperature,
+            }
+        }
+        if request.system:
+            payload["systemInstruction"] = {"parts": [{"text": request.system}]}
+
+        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+               f"{model}:generateContent?key={cfg.gemini_api_key}")
+
+        r = self._http.post(url, json=payload, timeout=120)
+        data = r.json()
+
+        if r.status_code == 429:
+            raise RateLimitError(f"Gemini rate limit: {data.get('error', {}).get('message', '')}")
+        if r.status_code in (400, 403):
+            err_msg = data.get("error", {}).get("message", "")
+            if "quota" in err_msg.lower() or "billing" in err_msg.lower():
+                raise TokensExhaustedError(f"Gemini: {err_msg}")
+            raise RuntimeError(f"Gemini error: {err_msg}")
+        r.raise_for_status()
+
+        try:
+            content = data["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError) as e:
+            raise RuntimeError(f"Gemini unexpected response: {data}") from e
+
+        tokens = (data.get("usageMetadata", {}).get("totalTokenCount", 0))
+        return content, model, tokens
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ПРОВАЙДЕР: xAI GROK
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _call_grok(self, request: LLMRequest) -> Tuple[str, str, int]:
+        if not cfg.grok_api_key:
+            raise RuntimeError("No Grok API key (XAI_API_KEY / GROK_API_KEY)")
+
+        fast_task = getattr(request, "_fast_task", False)
+        if fast_task:
+            model = "grok-3-mini"
+        else:
+            model = self._select_model(LLMProvider.GROK, request,
+                                       cfg.grok_model)  # grok-3
+
+        # xAI использует OpenAI-совместимый API
+        payload: Dict[str, Any] = {
+            "model": model,
+            "messages": self._build_messages(request),
+            "max_tokens": request.max_tokens,
+            "temperature": request.temperature,
+        }
+
+        r = self._http.post(
+            "https://api.x.ai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {cfg.grok_api_key}",
+                     "Content-Type": "application/json"},
+            json=payload, timeout=120
+        )
+        data = r.json()
+        if r.status_code == 429:
+            raise RateLimitError(f"Grok rate limit: {data.get('error', {}).get('message', '')}")
+        if r.status_code in (402, 403):
+            raise TokensExhaustedError(
+                f"Grok: {data.get('error', {}).get('message', 'quota')}")
+        r.raise_for_status()
+        content = data["choices"][0]["message"]["content"] or ""
+        tokens = data.get("usage", {}).get("total_tokens", 0)
+        return content, model, tokens
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ПРОВАЙДЕР: DEEPSEEK
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _call_deepseek(self, request: LLMRequest) -> Tuple[str, str, int]:
+        if not cfg.deepseek_api_key:
+            raise RuntimeError("No DeepSeek API key (DEEPSEEK_API_KEY)")
+
+        fast_task = getattr(request, "_fast_task", False)
+        if fast_task or request.task_type == "classify":
+            model = "deepseek-chat"  # V3 — быстрый
+        else:
+            model = "deepseek-reasoner"  # R1 — для всех сложных задач
+
+        payload: Dict[str, Any] = {
+            "model": model,
+            "messages": self._build_messages(request),
+            "max_tokens": request.max_tokens,
+            "temperature": request.temperature,
+        }
+        # Inject APEX AI delegation system prompt if not set
+        if not payload.get("system"):
+            payload.setdefault("system", _DEEPSEEK_DELEGATE_SYSTEM)
+
+        # deepseek-reasoner не поддерживает temperature != 1
+        if model == "deepseek-reasoner":
+            payload["temperature"] = 1
+
+        r = self._http.post(
+            "https://api.deepseek.com/chat/completions",
+            headers={"Authorization": f"Bearer {cfg.deepseek_api_key}",
+                     "Content-Type": "application/json"},
+            json=payload, timeout=120
+        )
+        data = r.json()
+        if r.status_code == 402 or "insufficient_balance" in str(data):
+            raise TokensExhaustedError("DeepSeek: insufficient balance")
+        if r.status_code == 429:
+            raise RateLimitError("DeepSeek: rate limit")
+        r.raise_for_status()
+        content = data["choices"][0]["message"]["content"] or ""
+        # Убираем <think>...</think> теги из R1 (внутренние рассуждения)
+        content = re.sub(r"<think>.*?</think>", "", content,
+                         flags=re.DOTALL).strip()
+        tokens = data.get("usage", {}).get("total_tokens", 0)
+        return content, model, tokens
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ПРОВАЙДЕР: GROQ
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _call_groq(self, request: LLMRequest) -> Tuple[str, str, int]:
+        if not cfg.groq_api_key:
+            raise RuntimeError("No Groq API key (GROQ_API_KEY)")
+
+        fast_task = getattr(request, "_fast_task", False)
+        task = request.task_type
+
+        # Выбор модели Groq под задачу
+        if fast_task or task == "classify":
+            model = "llama-3.1-8b-instant"
+        elif task == "code":
+            model = "qwen-qwq-32b"  # Лучший для кода на Groq
+        elif task in ("analysis", "quality"):
+            model = "llama-3.3-70b-versatile"
+        else:
+            model = self._select_model(LLMProvider.GROQ, request,
+                                       cfg.groq_model)  # llama-3.3-70b-versatile
+
+        # Инъекция системного промпта Groq если не задан в запросе
+        if not getattr(request, "system", None) and task not in ("classify",):
+            groq_msgs = [{"role": "system", "content": _GROQ_DELEGATE_SYSTEM}] + self._build_messages(request)
+        else:
+            groq_msgs = self._build_messages(request)
+
+        payload: Dict[str, Any] = {
+            "model": model,
+            "messages": groq_msgs,
+            "max_tokens": min(request.max_tokens, 8000),
+            "temperature": request.temperature,
+        }
+
+        r = self._http.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {cfg.groq_api_key}",
+                     "Content-Type": "application/json"},
+            json=payload, timeout=60
+        )
+        data = r.json()
+        if r.status_code == 429:
+            raise RateLimitError("Groq: rate limit")
+        r.raise_for_status()
+        content = data["choices"][0]["message"]["content"] or ""
+        tokens = data.get("usage", {}).get("total_tokens", 0)
+        return content, model, tokens
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ПРОВАЙДЕР: TOGETHER AI
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _call_together(self, request: LLMRequest) -> Tuple[str, str, int]:
+        if not cfg.together_api_key:
+            raise RuntimeError("No Together API key (TOGETHER_API_KEY)")
+
+        fast_task = getattr(request, "_fast_task", False)
+        task = request.task_type
+
+        # Together AI — агрегатор open-source моделей
+        if fast_task:
+            model = "meta-llama/Llama-3.2-3B-Instruct-Turbo"
+        elif task == "code":
+            model = "Qwen/Qwen3-235B-A22B"
+        elif task in ("analysis", "quality"):
+            model = "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8"
+        elif task == "multilingual":
+            model = "Qwen/Qwen3-235B-A22B"
+        else:
+            model = self._select_model(
+                LLMProvider.TOGETHER, request,
+                cfg.together_model  # meta-llama/Llama-4-Scout-17B-16E-Instruct
+            )
+
+        payload: Dict[str, Any] = {
+            "model": model,
+            "messages": self._build_messages(request),
+            "max_tokens": request.max_tokens,
+            "temperature": request.temperature,
+        }
+
+        r = self._http.post(
+            "https://api.together.xyz/v1/chat/completions",
+            headers={"Authorization": f"Bearer {cfg.together_api_key}",
+                     "Content-Type": "application/json"},
+            json=payload, timeout=120
+        )
+        data = r.json()
+        if r.status_code == 429:
+            raise RateLimitError(f"Together rate limit: {data.get('error', '')}")
+        if r.status_code in (402, 403):
+            raise TokensExhaustedError(f"Together: {data.get('error', 'quota')}")
+        r.raise_for_status()
+        content = data["choices"][0]["message"]["content"] or ""
+        tokens = data.get("usage", {}).get("total_tokens", 0)
+        return content, model, tokens
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ПРОВАЙДЕР: MISTRAL
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _call_mistral(self, request: LLMRequest) -> Tuple[str, str, int]:
+        if not cfg.mistral_api_key:
+            raise RuntimeError("No Mistral API key (MISTRAL_API_KEY)")
+
+        fast_task = getattr(request, "_fast_task", False)
+        if fast_task:
+            model = "mistral-small-latest"
+        else:
+            model = self._select_model(LLMProvider.MISTRAL, request,
+                                       cfg.mistral_model)  # mistral-large-latest
+
+        payload: Dict[str, Any] = {
+            "model": model,
+            "messages": self._build_messages(request),
+            "max_tokens": request.max_tokens,
+            "temperature": request.temperature,
+        }
+
+        r = self._http.post(
+            "https://api.mistral.ai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {cfg.mistral_api_key}",
+                     "Content-Type": "application/json"},
+            json=payload, timeout=90
+        )
+        data = r.json()
+        if r.status_code == 429:
+            raise RateLimitError(f"Mistral rate limit: {data.get('message', '')}")
+        if r.status_code in (402, 403):
+            raise TokensExhaustedError(
+                f"Mistral: {data.get('message', 'quota exceeded')}")
+        r.raise_for_status()
+        content = data["choices"][0]["message"]["content"] or ""
+        tokens = data.get("usage", {}).get("total_tokens", 0)
+        return content, model, tokens
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ПРОВАЙДЕР: PERPLEXITY
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _call_perplexity(self, request: LLMRequest) -> Tuple[str, str, int]:
+        if not cfg.perplexity_api_key:
+            raise RuntimeError("No Perplexity API key (PERPLEXITY_API_KEY)")
+
+        # Perplexity использует online-модели с поиском в интернете
+        task = request.task_type
+        if task in ("news", "search"):
+            model = "llama-3.1-sonar-large-128k-online"
+        else:
+            model = "llama-3.1-sonar-small-128k-online"
+
+        payload: Dict[str, Any] = {
+            "model": model,
+            "messages": self._build_messages(request),
+            "max_tokens": request.max_tokens,
+        }
+
+        r = self._http.post(
+            "https://api.perplexity.ai/chat/completions",
+            headers={"Authorization": f"Bearer {cfg.perplexity_api_key}",
+                     "Content-Type": "application/json"},
+            json=payload, timeout=60
+        )
+        if r.status_code == 429:
+            raise RateLimitError("Perplexity: rate limit")
+        r.raise_for_status()
+        content = r.json()["choices"][0]["message"]["content"] or ""
+        return content, model, 0
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ПРОВАЙДЕР: OLLAMA (локальный)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _call_ollama(self, request: LLMRequest) -> Tuple[str, str, int]:
+        model = cfg.ollama_model
+        payload: Dict[str, Any] = {
+            "model": model,
+            "messages": self._build_messages(request),
+            "stream": False,
+            "options": {
+                "temperature": request.temperature,
+                "num_predict": request.max_tokens
+            }
+        }
+        r = self._http.post(
+            f"{cfg.ollama_url}/api/chat",
+            json=payload, timeout=90
+        )
+        if r.status_code != 200:
+            raise RuntimeError(f"Ollama HTTP {r.status_code}")
+        data = r.json()
+        content = data.get("message", {}).get("content", "")
+        tokens = data.get("eval_count", 0)
+        return content, model, tokens
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # MODEL PROFILER ИНТЕГРАЦИЯ
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _record_profiler(self, provider: LLMProvider, model: str,
+                         task_type: str, content: str, question: str,
+                         latency_ms: float, success: bool) -> None:
+        """Записать результат вызова в ModelProfiler."""
+        try:
+            from brain.model_profiler import ModelProfiler
+            profiler = ModelProfiler.get()
+            quality = self.score_quality(content, question) if success else 0.0
+            profiler.record(
+                provider=provider.value,
+                model=model,
+                task_type=task_type,
+                success=success,
+                quality_score=quality,
+                latency_ms=latency_ms,
+            )
+        except Exception:
+            pass  # Профилер не должен ломать основной поток
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # УПРАВЛЕНИЕ СТАТУСАМИ
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _is_available(self, provider: LLMProvider) -> bool:
+        status = self._statuses[provider]
+        now = time.time()
+        # If provider is in cooldown, check recent success (last 10 min)
+        if now < status.cooldown_until:
+            last_ok = self._provider_stats.get(provider, {}).get("last_success_time", 0)
+            if last_ok and (now - last_ok) < 600:
+                log.debug("Provider %s: overriding cooldown due to recent success", provider)
+            else:
+                return False
+        if provider == LLMProvider.OLLAMA:
+            return self._check_ollama()
+        # Check key presence
+        key_checks = {
+            LLMProvider.OPENAI:     cfg.openai_api_key,
+            LLMProvider.CLAUDE:     cfg.claude_api_key,
+            LLMProvider.GEMINI:     cfg.gemini_api_key,
+            LLMProvider.GROK:       cfg.grok_api_key,
+            LLMProvider.DEEPSEEK:   cfg.deepseek_api_key,
+            LLMProvider.GROQ:       cfg.groq_api_key,
+            LLMProvider.TOGETHER:   cfg.together_api_key,
+            LLMProvider.MISTRAL:    cfg.mistral_api_key,
+            LLMProvider.PERPLEXITY: cfg.perplexity_api_key,
+        }
+        key = key_checks.get(provider, "")
+        if not key:
+            return False
+        # If key exists and provider succeeded recently, consider available
+        last_ok = self._provider_stats.get(provider, {}).get("last_success_time", 0)
+        if last_ok and (now - last_ok) < 600:
+            return True
+        return not status.tokens_exhausted
+
+    def _check_ollama(self) -> bool:
+        """Быстрая проверка доступности Ollama с кешированием на 5 минут."""
+        status = self._statuses[LLMProvider.OLLAMA]
+        if self._ollama_available is not None:
+            if time.time() - status.last_check < 300:
+                return self._ollama_available
+        try:
+            r = self._http_local.get(f"{cfg.ollama_url}/api/tags", timeout=2)
+            self._ollama_available = r.status_code == 200
+        except Exception:
+            self._ollama_available = False
+        status.last_check = time.time()
+        return self._ollama_available
+
+    def _mark_success(self, provider: LLMProvider, latency_ms: float = 0.0) -> None:
+        with self._rlock:
+            s = self._statuses[provider]
+            s.available = True
+            s.tokens_exhausted = False
+            s.rate_limited = False
+            s.last_error = ""
+            s.cooldown_until = 0.0
+            # Update provider stats for routing intelligence
+            stats = self._provider_stats.get(provider)
+            if stats is not None:
+                stats["last_success_time"] = time.time()
+                stats["error_count"] = max(0, stats["error_count"] - 1)
+                stats["call_count"] += 1
+                if latency_ms > 0:
+                    n = stats["call_count"]
+                    stats["avg_latency_ms"] = (
+                        (stats["avg_latency_ms"] * (n - 1) + latency_ms) / n
+                    )
+
+    def _mark_tokens_exhausted(self, provider: LLMProvider) -> None:
+        with self._rlock:
+            self._statuses[provider].tokens_exhausted = True
+            self._statuses[provider].cooldown_until = time.time() + 3600
+
+    def _mark_rate_limited(self, provider: LLMProvider,
+                           cooldown: float = 60) -> None:
+        with self._rlock:
+            self._statuses[provider].rate_limited = True
+            self._statuses[provider].cooldown_until = time.time() + cooldown
+
+    def _mark_error(self, provider: LLMProvider, error: str) -> None:
+        with self._rlock:
+            self._statuses[provider].last_error = error
+            self._statuses[provider].cooldown_until = time.time() + 10
+            stats = self._provider_stats.get(provider)
+            if stats is not None:
+                stats["error_count"] += 1
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # COST STATS
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def get_cost_stats(self) -> Dict[str, Any]:
+        """Real-time token cost tracking."""
+        return {
+            "daily_cost_usd": round(self._daily_cost_usd, 4),
+            "daily_limit_usd": self._daily_cost_limit,
+            "groq_only_mode": self._groq_only_mode,
+            "monthly_projection_usd": round(self._daily_cost_usd * 30, 2),
+            "daily_cost_date": self._daily_cost_date,
+        }

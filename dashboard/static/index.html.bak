@@ -1,0 +1,1925 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MaxAI — Панель управления</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+:root{
+  --bg:#030712;--bg1:#0a1628;--bg2:#0f172a;--bg3:#1e293b;
+  --em:#10b981;--em2:#34d399;--am:#f59e0b;--re:#ef4444;--bl:#3b82f6;--pu:#8b5cf6;
+  --tx:#e2e8f0;--tx2:#94a3b8;--tx3:#475569;
+  --border:rgba(255,255,255,0.08);--glow:rgba(16,185,129,0.15);
+  --card:rgba(15,23,42,0.85);--radius:16px;--radius-sm:10px;
+  --shadow:0 8px 32px rgba(0,0,0,0.4);
+  --font:'Inter',sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body,#root{height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--tx);font-family:var(--font);font-size:14px;line-height:1.5}
+
+/* Layout */
+.layout{display:grid;grid-template-rows:48px 1fr;grid-template-columns:72px 1fr;height:100vh;overflow:hidden}
+.hud{grid-column:1/-1;grid-row:1;background:rgba(3,7,18,0.95);backdrop-filter:blur(20px);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 16px;gap:20px;z-index:100;position:relative}
+.sidebar{grid-column:1;grid-row:2;background:var(--bg1);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:12px 0;gap:4px;overflow-y:auto;overflow-x:hidden}
+.content{grid-column:2;grid-row:2;overflow-y:auto;padding:24px;background:var(--bg)}
+
+/* HUD */
+.hud-logo{font-weight:700;font-size:15px;color:var(--em);letter-spacing:-.3px;white-space:nowrap;margin-right:4px}
+.hud-logo span{color:var(--tx2)}
+.hud-divider{width:1px;height:24px;background:var(--border);flex-shrink:0}
+.hud-pill{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:500;padding:4px 10px;border-radius:20px;background:rgba(255,255,255,0.04);border:1px solid var(--border);white-space:nowrap}
+.hud-pill.ok{border-color:rgba(16,185,129,.3);color:var(--em)}
+.hud-pill.warn{border-color:rgba(245,158,11,.3);color:var(--am)}
+.hud-pill.off{border-color:rgba(239,68,68,.2);color:var(--tx2)}
+.hud-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.hud-dot.g{background:var(--em);box-shadow:0 0 6px var(--em)}
+.hud-dot.a{background:var(--am);box-shadow:0 0 6px var(--am)}
+.hud-dot.r{background:var(--re);box-shadow:0 0 6px var(--re)}
+.hud-dot.gray{background:var(--tx3)}
+.hud-sep{flex:1}
+
+/* Sidebar */
+.nav-btn{display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 8px;border-radius:var(--radius-sm);border:none;background:transparent;color:var(--tx2);cursor:pointer;transition:all .2s;width:64px;font-family:var(--font)}
+.nav-btn:hover{background:rgba(255,255,255,.06);color:var(--tx)}
+.nav-btn.active{background:linear-gradient(135deg,rgba(16,185,129,.15),rgba(16,185,129,.05));color:var(--em);border:1px solid rgba(16,185,129,.2)}
+.nav-btn svg{width:22px;height:22px;stroke-width:1.7}
+.nav-label{font-size:10px;font-weight:500;letter-spacing:.3px}
+
+/* Cards */
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;backdrop-filter:blur(10px)}
+.card-sm{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px 16px}
+.card-title{font-size:11px;font-weight:600;color:var(--tx2);text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.card-title-dot{width:6px;height:6px;border-radius:50%;background:var(--em)}
+
+/* Grid layouts */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.grid-auto{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+
+/* Stat cards */
+.stat-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:16px;display:flex;flex-direction:column;gap:6px;position:relative;overflow:hidden}
+.stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;border-radius:2px 2px 0 0}
+.stat-card.em::before{background:linear-gradient(90deg,var(--em),transparent)}
+.stat-card.am::before{background:linear-gradient(90deg,var(--am),transparent)}
+.stat-card.bl::before{background:linear-gradient(90deg,var(--bl),transparent)}
+.stat-card.pu::before{background:linear-gradient(90deg,var(--pu),transparent)}
+.stat-label{font-size:11px;color:var(--tx2);font-weight:500;text-transform:uppercase;letter-spacing:.5px}
+.stat-value{font-size:28px;font-weight:700;letter-spacing:-1px;line-height:1}
+.stat-value.em{color:var(--em)}
+.stat-value.am{color:var(--am)}
+.stat-value.bl{color:var(--bl)}
+.stat-value.pu{color:var(--pu)}
+.stat-sub{font-size:12px;color:var(--tx2)}
+
+/* Progress bar */
+.progress-wrap{height:6px;background:rgba(255,255,255,.06);border-radius:3px;overflow:hidden}
+.progress-bar{height:100%;border-radius:3px;transition:width .5s ease}
+.progress-bar.em{background:linear-gradient(90deg,var(--em),var(--em2))}
+.progress-bar.am{background:var(--am)}
+.progress-bar.re{background:var(--re)}
+.progress-bar.bl{background:var(--bl)}
+
+/* Agent cards */
+.agent-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;display:flex;align-items:center;gap:12px;cursor:pointer;transition:all .2s}
+.agent-card:hover{border-color:rgba(16,185,129,.2);background:rgba(15,23,42,.95);transform:translateY(-1px)}
+.agent-card.working{border-color:rgba(16,185,129,.3)}
+.agent-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.agent-dot.idle{background:var(--tx3)}
+.agent-dot.working{background:var(--em);box-shadow:0 0 8px var(--em);animation:pulse 2s infinite}
+.agent-dot.error{background:var(--re)}
+.agent-name{font-weight:600;font-size:13px}
+.agent-status{font-size:11px;color:var(--tx2)}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.7;transform:scale(1.2)}}
+
+/* Chat */
+.chat-wrap{display:flex;flex-direction:column;height:calc(100vh - 48px - 48px);max-height:700px}
+.chat-messages{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:12px;padding:4px 0 16px;scrollbar-width:thin;scrollbar-color:var(--bg3) transparent}
+.msg{display:flex;gap:10px;max-width:85%}
+.msg.user{align-self:flex-end;flex-direction:row-reverse}
+.msg-bubble{padding:12px 16px;border-radius:14px;font-size:14px;line-height:1.6}
+.msg-bubble.ai{background:var(--bg2);border:1px solid var(--border);border-bottom-left-radius:4px}
+.msg-bubble.user{background:linear-gradient(135deg,rgba(16,185,129,.2),rgba(16,185,129,.1));border:1px solid rgba(16,185,129,.2);border-bottom-right-radius:4px}
+.msg-bubble.ai p{margin-bottom:8px}.msg-bubble.ai p:last-child{margin-bottom:0}
+.msg-bubble.ai code{background:rgba(0,0,0,.4);padding:1px 6px;border-radius:4px;font-size:12px;font-family:monospace}
+.msg-bubble.ai pre{background:rgba(0,0,0,.5);border-radius:8px;padding:12px;overflow-x:auto;margin:8px 0}
+.msg-bubble.ai pre code{background:none;padding:0}
+.msg-avatar{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;margin-top:2px}
+.msg-avatar.ai{background:linear-gradient(135deg,var(--em),rgba(16,185,129,.4));border:1px solid rgba(16,185,129,.3)}
+.msg-avatar.user{background:var(--bg3);border:1px solid var(--border)}
+.msg-time{font-size:10px;color:var(--tx3);margin-top:4px;text-align:right}
+.typing-dots{display:flex;gap:4px;padding:4px 0}
+.typing-dot{width:7px;height:7px;border-radius:50%;background:var(--tx2);animation:blink 1.4s infinite}
+.typing-dot:nth-child(2){animation-delay:.2s}.typing-dot:nth-child(3){animation-delay:.4s}
+@keyframes blink{0%,80%,100%{opacity:.3;transform:scale(.8)}40%{opacity:1;transform:scale(1)}}
+.chat-input-row{display:flex;gap:10px;align-items:flex-end;padding-top:12px;border-top:1px solid var(--border)}
+.chat-textarea{flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:10px 14px;color:var(--tx);font-family:var(--font);font-size:14px;resize:none;outline:none;min-height:44px;max-height:120px;transition:border-color .2s;line-height:1.5}
+.chat-textarea:focus{border-color:rgba(16,185,129,.4)}
+.chat-textarea::placeholder{color:var(--tx3)}
+.quick-btns{display:flex;flex-wrap:wrap;gap:6px;padding-bottom:10px}
+.quick-btn{background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:20px;padding:5px 12px;font-size:12px;color:var(--tx2);cursor:pointer;font-family:var(--font);transition:all .15s}
+.quick-btn:hover{background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.3);color:var(--em)}
+
+/* Terminal */
+.terminal{background:#000;border-radius:var(--radius-sm);font-family:'Courier New',monospace;font-size:13px;padding:16px;height:100%;display:flex;flex-direction:column;min-height:300px}
+.term-output{flex:1;overflow-y:auto;white-space:pre-wrap;word-break:break-all;scrollbar-width:thin;scrollbar-color:var(--bg3) transparent;margin-bottom:12px;color:#d4d4d4}
+.term-line{margin-bottom:2px;line-height:1.5}
+.term-line.cmd{color:#10b981}
+.term-line.err{color:#ef4444}
+.term-line.sys{color:#64748b;font-style:italic}
+.term-input-row{display:flex;align-items:center;gap:6px}
+.term-prompt{color:#10b981;font-size:13px;white-space:nowrap}
+.term-input{flex:1;background:transparent;border:none;outline:none;color:#e2e8f0;font-family:'Courier New',monospace;font-size:13px}
+.term-quickbtns{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}
+.term-qbtn{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:3px 8px;font-size:11px;color:#64748b;cursor:pointer;font-family:'Courier New',monospace;transition:all .15s;white-space:nowrap}
+.term-qbtn:hover{background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.3);color:#10b981}
+
+/* Logs */
+.log-viewer{background:var(--bg2);border-radius:var(--radius-sm);font-family:'Courier New',monospace;font-size:12px;height:100%;overflow-y:auto;padding:12px;scrollbar-width:thin;scrollbar-color:var(--bg3) transparent}
+.log-line{padding:2px 0;border-bottom:1px solid rgba(255,255,255,.02);line-height:1.5}
+.log-info{color:#94a3b8}.log-warn{color:#f59e0b}.log-error{color:#ef4444}.log-debug{color:#475569}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;border:1px solid;font-family:var(--font);font-size:13px;font-weight:500;cursor:pointer;transition:all .15s;white-space:nowrap}
+.btn-em{background:linear-gradient(135deg,rgba(16,185,129,.2),rgba(16,185,129,.05));border-color:rgba(16,185,129,.4);color:var(--em)}
+.btn-em:hover{background:linear-gradient(135deg,rgba(16,185,129,.3),rgba(16,185,129,.1));box-shadow:0 0 20px rgba(16,185,129,.2)}
+.btn-ghost{background:transparent;border-color:var(--border);color:var(--tx2)}
+.btn-ghost:hover{background:rgba(255,255,255,.05);color:var(--tx)}
+.btn-danger{background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.3);color:var(--re)}
+.btn-danger:hover{background:rgba(239,68,68,.2)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+
+/* Badges */
+.badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.badge-em{background:rgba(16,185,129,.15);color:var(--em);border:1px solid rgba(16,185,129,.2)}
+.badge-am{background:rgba(245,158,11,.15);color:var(--am);border:1px solid rgba(245,158,11,.2)}
+.badge-re{background:rgba(239,68,68,.15);color:var(--re);border:1px solid rgba(239,68,68,.2)}
+.badge-gray{background:rgba(100,116,139,.1);color:var(--tx2);border:1px solid var(--border)}
+
+/* Tabs inside pages */
+.tab-bar{display:flex;gap:4px;padding:4px;background:var(--bg2);border-radius:10px;border:1px solid var(--border);margin-bottom:16px}
+.tab-item{padding:6px 14px;border-radius:7px;font-size:12px;font-weight:500;cursor:pointer;transition:all .15s;color:var(--tx2);border:none;background:transparent;font-family:var(--font)}
+.tab-item.active{background:var(--bg3);color:var(--tx);box-shadow:0 2px 8px rgba(0,0,0,.2)}
+.tab-item:hover:not(.active){color:var(--tx)}
+
+/* Inputs */
+.input{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--tx);font-family:var(--font);font-size:13px;outline:none;transition:border-color .2s;width:100%}
+.input:focus{border-color:rgba(16,185,129,.4)}
+
+/* Provider cards */
+.provider-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px 16px;display:flex;align-items:center;justify-content:space-between}
+.provider-name{font-weight:600;font-size:13px;text-transform:capitalize}
+.provider-detail{font-size:11px;color:var(--tx2);margin-top:2px}
+
+/* Toast */
+.toast-stack{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:8px;z-index:9999}
+.toast{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px 16px;min-width:260px;max-width:360px;display:flex;align-items:center;gap:10px;font-size:13px;box-shadow:var(--shadow);animation:slideIn .2s ease}
+.toast.ok{border-color:rgba(16,185,129,.3)}.toast.err{border-color:rgba(239,68,68,.3)}.toast.warn{border-color:rgba(245,158,11,.3)}
+@keyframes slideIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}
+
+/* Section headers */
+.section-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+.section-title{font-size:15px;font-weight:700;display:flex;align-items:center;gap:8px}
+.section-sub{font-size:12px;color:var(--tx2);margin-top:2px}
+
+/* Charts */
+.chart-wrap{position:relative;height:220px}
+
+/* Split layout */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:16px;height:calc(100vh - 48px - 48px - 120px);min-height:400px}
+.split-full{height:100%}
+
+/* Scrollbar */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--bg3);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--tx3)}
+
+/* Activity feed */
+.feed-item{padding:10px 0;border-bottom:1px solid rgba(255,255,255,.04);display:flex;align-items:flex-start;gap:10px}
+.feed-item:last-child{border-bottom:none}
+.feed-icon{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0}
+.feed-text{font-size:12px;color:var(--tx);line-height:1.4}
+.feed-time{font-size:10px;color:var(--tx3);margin-top:3px}
+
+/* Notification dot */
+.notif-dot{width:8px;height:8px;border-radius:50%;background:var(--re);position:absolute;top:6px;right:6px;box-shadow:0 0 6px var(--re)}
+
+/* Glow effects */
+.glow-em{box-shadow:0 0 30px rgba(16,185,129,.08)}
+.glow-bl{box-shadow:0 0 30px rgba(59,130,246,.08)}
+
+/* Metric bars */
+.metric-row{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.metric-name{font-size:12px;color:var(--tx2);width:40px;flex-shrink:0}
+.metric-bar-wrap{flex:1;height:8px;background:rgba(255,255,255,.06);border-radius:4px;overflow:hidden}
+.metric-bar{height:100%;border-radius:4px;transition:width .6s ease}
+.metric-val{font-size:12px;font-weight:600;width:40px;text-align:right}
+
+/* Home quick chat */
+.home-chat-input{display:flex;gap:8px;padding:12px;background:var(--bg2);border:1px solid var(--border);border-radius:12px}
+.home-chat-input input{flex:1;background:transparent;border:none;outline:none;color:var(--tx);font-family:var(--font);font-size:14px}
+.home-chat-input input::placeholder{color:var(--tx3)}
+
+/* Pulse ring animation */
+@keyframes ring{0%{transform:scale(1);opacity:.8}100%{transform:scale(2.5);opacity:0}}
+.ring{position:absolute;border-radius:50%;animation:ring 2s infinite}
+
+/* Responsive adjustments */
+@media(max-width:900px){.grid4{grid-template-columns:repeat(2,1fr)}.split{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useCallback,createContext,useContext} = React;
+
+/* ── Context ── */
+const Ctx = createContext({});
+const ToastCtx = createContext({});
+
+/* ── API helper ── */
+const api = async (path, opts={}) => {
+  const r = await fetch(path, {headers:{'Content-Type':'application/json'},...opts});
+  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+};
+const post = (p,b) => api(p,{method:'POST',body:JSON.stringify(b)});
+
+/* ── WebSocket hook ── */
+function useWS(onMsg) {
+  const [status,setStatus] = useState('off');
+  const ws = useRef(null);
+  const retry = useRef(null);
+  useEffect(()=>{
+    let alive=true;
+    const connect = ()=>{
+      if(!alive) return;
+      const proto = location.protocol==='https:'?'wss:':'ws:';
+      const w = new WebSocket(`${proto}//${location.host}/ws/live`);
+      ws.current=w;
+      w.onopen=()=>{setStatus('on')};
+      w.onmessage=e=>{try{onMsg(JSON.parse(e.data))}catch(_){}};
+      w.onclose=()=>{setStatus('off');if(alive) retry.current=setTimeout(connect,3000)};
+      w.onerror=()=>{w.close()};
+    };
+    connect();
+    return ()=>{alive=false;clearTimeout(retry.current);ws.current?.close()};
+  },[]);
+  return status;
+}
+
+/* ── Toast system ── */
+function ToastProvider({children}){
+  const [toasts,setToasts]=useState([]);
+  const add=(msg,type='ok')=>{
+    const id=Date.now();
+    setToasts(t=>[...t,{id,msg,type}]);
+    setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)),3500);
+  };
+  const icons={ok:'✓',err:'✕',warn:'⚠'};
+  return <ToastCtx.Provider value={{add}}>
+    {children}
+    <div className="toast-stack">
+      {toasts.map(t=><div key={t.id} className={`toast ${t.type}`}>
+        <span style={{fontSize:16}}>{icons[t.type]||'ℹ'}</span>
+        <span>{t.msg}</span>
+      </div>)}
+    </div>
+  </ToastCtx.Provider>;
+}
+
+/* ── Icons ── */
+const Ic = {
+  home:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>,
+  chat:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>,
+  agents:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 10-16 0"/><circle cx="18" cy="8" r="3"/><path d="M22 18.5a4 4 0 00-4-3.5"/></svg>,
+  trade:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>,
+  system:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>,
+  settings:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>,
+  earnings:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>,
+  projects:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>,
+  analytics:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>,
+  activity:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>,
+  send:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>,
+  refresh:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>,
+  bot:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M12 7v4M8 11V7a4 4 0 018 0v4"/><circle cx="9" cy="16" r="1" fill="currentColor"/><circle cx="15" cy="16" r="1" fill="currentColor"/></svg>,
+};
+
+/* ── HUD ── */
+function Hud({wsStatus,metrics,agentsCount}){
+  const cpu=metrics.cpu_pct??0, ram=metrics.ram_pct??0;
+  const cpuColor=cpu>80?'#ef4444':cpu>60?'#f59e0b':'#10b981';
+  const ramColor=ram>85?'#ef4444':ram>70?'#f59e0b':'#10b981';
+  return <div className="hud">
+    <div className="hud-logo" style={{display:"flex",alignItems:"center",gap:"8px"}}><img src="/static/avatar.jpg" style={{width:28,height:28,borderRadius:"50%",objectFit:"cover",border:"2px solid var(--em)"}} alt="Max"/><span style={{color:"var(--em)",fontWeight:700}}>Max</span><span style={{color:"var(--tx1)"}}>AI</span></div>
+    <div className="hud-divider"/>
+    <div className={`hud-pill ${wsStatus==='on'?'ok':'off'}`}>
+      <div className={`hud-dot ${wsStatus==='on'?'g':'gray'}`}/>
+      {wsStatus==='on'?'LIVE':'REST'}
+    </div>
+    <div className="hud-pill ok">
+      <div className="hud-dot g"/>
+      {agentsCount} агентов
+    </div>
+    <div className="hud-pill" style={{color:cpuColor,borderColor:cpuColor+'44'}}>
+      CPU {cpu}%
+    </div>
+    <div className="hud-pill" style={{color:ramColor,borderColor:ramColor+'44'}}>
+      RAM {ram}%
+    </div>
+    <div className="hud-pill ok">
+      <div className="hud-dot g"/>
+      {metrics.disk_pct??0}% disk
+    </div>
+    <div className="hud-sep"/>
+    <div style={{fontSize:12,color:'var(--tx3)'}}>
+      {new Date().toLocaleTimeString('ru')}
+    </div>
+  </div>;
+}
+
+/* ── Sidebar ── */
+function Sidebar({tab,setTab}){
+  const tabs=[
+    {id:'home',label:'Главная',icon:Ic.home},
+    {id:'chat',label:'ИИ Чат',icon:Ic.chat},
+    {id:'agents',label:'Агенты',icon:Ic.agents},
+    {id:'earnings',label:'Доходы',icon:Ic.earnings},
+    {id:'projects',label:'Проекты',icon:Ic.projects},
+    {id:'activity',label:'Активность',icon:Ic.activity},
+    {id:'trading',label:'Торговля',icon:Ic.trade},
+    {id:'analytics',label:'Аналитика',icon:Ic.analytics},
+    {id:'system',label:'Система',icon:Ic.system},
+    {id:'settings',label:'Сервис',icon:Ic.settings},
+    {id:'hyperion',label:'Hyperion v12',icon:'⚡'},
+  ];
+  return <div className="sidebar">
+    {tabs.map(t=><button key={t.id} className={`nav-btn ${tab===t.id?'active':''}`} onClick={()=>setTab(t.id)}>
+      {t.icon}
+      <span className="nav-label">{t.label}</span>
+    </button>)}
+  </div>;
+}
+
+/* ── HOME TAB ── */
+function HomeTab({metrics,agents,wsStat}){
+  const {add}=useContext(ToastCtx);
+  const [quickMsg,setQuickMsg]=useState('');
+  const [quickReply,setQuickReply]=useState('');
+  const [quickLoading,setQuickLoading]=useState(false);
+  const [testRes,setTestRes]=useState(null);
+  const [testLoading,setTestLoading]=useState(false);
+  const [providers,setProviders]=useState([]);
+
+  useEffect(()=>{
+    api('/api/llm/status').then(d=>setProviders(d.providers||d||[])).catch(()=>{});
+    api('/api/system/self-test',{method:'POST'}).then(d=>setTestRes(d)).catch(()=>{});
+  },[]);
+
+  const sendQuick=async()=>{
+    if(!quickMsg.trim()||quickLoading) return;
+    const msg=quickMsg.trim(); setQuickMsg(''); setQuickLoading(true);
+    try{
+      const d=await post('/api/chat',{text:msg,session_id:'home_quick'});
+      setQuickReply(d.response||d.text||d.answer||JSON.stringify(d));
+    }catch(e){setQuickReply('Ошибка: '+e.message)}
+    setQuickLoading(false);
+  };
+
+  const working=agents.filter(a=>a.status==='working').length;
+  const idle=agents.filter(a=>a.status==='idle'||!a.status).length;
+  const total=agents.length||108;
+  const pnl=metrics.pnl??0;
+  const cost=metrics.cost_today??0;
+
+  return <div>
+    <div className="section-hd">
+      <div>
+        <div className="section-title">🏠 Панель управления</div>
+        <div className="section-sub">Обзор системы в реальном времени</div>
+      </div>
+      <div style={{display:'flex',gap:8,alignItems:'center'}}>
+        <div className={`badge ${wsStat==='on'?'badge-em':'badge-gray'}`}>
+          {wsStat==='on'?'● Живые данные':'○ REST режим (данные через API)'}
+        </div>
+      </div>
+    </div>
+
+    {/* Stat cards */}
+    <div className="grid4" style={{marginBottom:20}}>
+      <div className="stat-card em">
+        <div className="stat-label">Агенты активны</div>
+        <div className="stat-value em">{working}</div>
+        <div className="stat-sub">из {total} зарегистрировано</div>
+      </div>
+      <div className="stat-card am">
+        <div className="stat-label">CPU / RAM</div>
+        <div className="stat-value am">{metrics.cpu_pct??0}%</div>
+        <div className="stat-sub">RAM {metrics.ram_pct??0}% · Диск {metrics.disk_pct??0}%</div>
+      </div>
+      <div className="stat-card bl">
+        <div className="stat-label">Торговля P&L</div>
+        <div className={`stat-value ${pnl>=0?'em':''}` } style={pnl<0?{color:'var(--re)'}:{}}>{pnl>=0?'+':''}{pnl.toFixed(2)}$</div>
+        <div className="stat-sub">позиций открыто</div>
+      </div>
+      <div className="stat-card pu">
+        <div className="stat-label">Расходы сегодня</div>
+        <div className="stat-value pu">${cost.toFixed(4)}</div>
+        <div className="stat-sub">лимит $1.00 / день</div>
+      </div>
+    </div>
+
+    <div className="grid2" style={{marginBottom:20}}>
+      {/* Quick chat */}
+      <div className="card">
+        <div className="card-title"><div className="card-title-dot"/>Быстрый вопрос к ИИ</div>
+        <div className="home-chat-input" style={{marginBottom:10}}>
+          <input
+            placeholder="Спроси что-нибудь... (Enter)"
+            value={quickMsg}
+            onChange={e=>setQuickMsg(e.target.value)}
+            onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&sendQuick()}
+            disabled={quickLoading}
+          />
+          <button className="btn btn-em" onClick={sendQuick} disabled={quickLoading||!quickMsg.trim()} style={{padding:'6px 12px'}}>
+            {quickLoading?'…':Ic.send}
+          </button>
+        </div>
+        <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
+          {['Статус системы','Сколько агентов?','Что делает бот?','Покажи провайдеров'].map(q=>
+            <button key={q} className="quick-btn" onClick={()=>{setQuickMsg(q);}}>{q}</button>
+          )}
+        </div>
+        {quickLoading && <div style={{color:'var(--tx2)',fontSize:13,padding:'8px 0'}}>
+          <span className="typing-dots"><span className="typing-dot"/><span className="typing-dot"/><span className="typing-dot"/></span> Думаю...
+        </div>}
+        {quickReply && <div style={{background:'var(--bg2)',borderRadius:10,padding:12,fontSize:13,color:'var(--tx)',border:'1px solid var(--border)',marginTop:4,maxHeight:150,overflowY:'auto'}}
+          dangerouslySetInnerHTML={{__html:marked.parse?.(quickReply)||quickReply}}
+        />}
+      </div>
+
+      {/* System test */}
+      <div className="card">
+        <div className="card-title"><div className="card-title-dot"/>Здоровье системы</div>
+        {testRes ? <div>
+          <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:14}}>
+            <div style={{fontSize:32,fontWeight:700,color:'var(--em)'}}>{testRes.passed}/{testRes.total}</div>
+            <div>
+              <div style={{fontWeight:600,fontSize:13}}>тестов прошло</div>
+              <div style={{fontSize:12,color:'var(--tx2)'}}>Все системы в норме</div>
+            </div>
+          </div>
+          {Object.entries(testRes.results||{}).map(([k,v])=>{
+            const ok=v==='ok'||Array.isArray(v)||typeof v==='number';
+            return <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'4px 0',borderBottom:'1px solid rgba(255,255,255,.04)',fontSize:12}}>
+              <span style={{color:'var(--tx2)'}}>{k}</span>
+              <span className={`badge ${ok?'badge-em':'badge-re'}`}>
+                {Array.isArray(v)?v.slice(0,3).join(', ')+(v.length>3?'…':''):String(v).slice(0,30)}
+              </span>
+            </div>;
+          })}
+        </div> : <div style={{color:'var(--tx2)',fontSize:13}}>Запуск тестов...</div>}
+      </div>
+    </div>
+
+    {/* System metrics */}
+    <div className="card">
+      <div className="card-title"><div className="card-title-dot"/>Ресурсы сервера</div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px 32px'}}>
+        {[
+          {n:'CPU',v:metrics.cpu_pct??0,c:'em'},
+          {n:'RAM',v:metrics.ram_pct??0,c:metrics.ram_pct>80?'re':'em'},
+          {n:'DISK',v:metrics.disk_pct??0,c:metrics.disk_pct>85?'re':'em'},
+          {n:'NET↓',v:Math.min(100,((metrics.net_recv_mb??0)/100)*1),c:'bl'},
+        ].map(m=><div key={m.n} className="metric-row">
+          <span className="metric-name">{m.n}</span>
+          <div className="metric-bar-wrap">
+            <div className={`metric-bar ${m.c}`} style={{width:`${m.v}%`}}/>
+          </div>
+          <span className="metric-val" style={{color:`var(--${m.c})`}}>{m.v.toFixed(0)}%</span>
+        </div>)}
+      </div>
+      {metrics.ram_used_mb && <div style={{fontSize:12,color:'var(--tx2)',marginTop:8}}>
+        RAM: {metrics.ram_used_mb}MB / {metrics.ram_total_mb}MB · Диск: {metrics.disk_used_gb}GB / {metrics.disk_total_gb}GB
+      </div>}
+    </div>
+  </div>;
+}
+
+/* ── CHAT TAB ── */
+function ChatTab(){
+  const {add}=useContext(ToastCtx);
+  const [msgs,setMsgs]=useState([{role:'ai',text:'Привет! Я **MaxAI** — ваш персональный ИИ-ассистент.\n\nЯ управляю 108 агентами, отслеживаю торговлю, веду аналитику и выполняю задачи. Что хотите узнать?',ts:Date.now()}]);
+  const [input,setInput]=useState('');
+  const [loading,setLoading]=useState(false);
+  const [session]=useState('dashboard_'+Math.random().toString(36).slice(2,8));
+  const bottom=useRef(null);
+  const textRef=useRef(null);
+
+  useEffect(()=>bottom.current?.scrollIntoView({behavior:'smooth'}),[msgs]);
+
+  const send=async(text)=>{
+    const t=(text||input).trim();
+    if(!t||loading) return;
+    setInput('');
+    setMsgs(m=>[...m,{role:'user',text:t,ts:Date.now()}]);
+    setLoading(true);
+    try{
+      const d=await post('/api/chat',{text:t,session_id:session,source:'dashboard'});
+      const reply=d.response||d.text||d.answer||d.result||JSON.stringify(d);
+      setMsgs(m=>[...m,{role:'ai',text:reply,ts:Date.now()}]);
+    }catch(e){
+      setMsgs(m=>[...m,{role:'ai',text:'⚠️ Ошибка: '+e.message,ts:Date.now()}]);
+    }
+    setLoading(false);
+  };
+
+  const quicks=['Статус всех агентов','Что делает бот прямо сейчас?','Покажи последние ошибки','Какие провайдеры работают?','Анализ расходов','Планы на сегодня'];
+  const fmt=t=>new Date(t).toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'});
+
+  return <div style={{display:'flex',flexDirection:'column',height:'calc(100vh - 48px - 48px)',overflow:'hidden'}}>
+    <div className="section-hd" style={{flexShrink:0,paddingBottom:12,borderBottom:'1px solid var(--border)',marginBottom:12}}>
+      <div>
+        <div className="section-title">💬 ИИ Чат</div>
+        <div className="section-sub">Диалог с персональным ИИ</div>
+      </div>
+      <button className="btn btn-ghost" style={{fontSize:12}} onClick={()=>setMsgs([{role:'ai',text:'История очищена. Чем могу помочь?',ts:Date.now()}])}>
+        🗑 Очистить
+      </button>
+    </div>
+
+    <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:12,flexShrink:0}}>
+      {quicks.map(q=><button key={q} className="quick-btn" onClick={()=>send(q)}>{q}</button>)}
+    </div>
+
+    <div className="chat-messages" style={{flex:1,overflowY:'auto'}}>
+      {msgs.map((m,i)=><div key={i} className={`msg ${m.role}`}>
+        <div className={`msg-avatar ${m.role}`}>{m.role==='ai'?'🤖':'👤'}</div>
+        <div>
+          <div className={`msg-bubble ${m.role}`}
+            dangerouslySetInnerHTML={{__html:m.role==='ai'?(marked.parse?.(m.text)||m.text):m.text.replace(/</g,'&lt;')}}
+          />
+          <div className="msg-time">{fmt(m.ts)}</div>
+        </div>
+      </div>)}
+      {loading && <div className="msg ai">
+        <div className="msg-avatar ai">🤖</div>
+        <div className="msg-bubble ai"><div className="typing-dots"><div className="typing-dot"/><div className="typing-dot"/><div className="typing-dot"/></div></div>
+      </div>}
+      <div ref={bottom}/>
+    </div>
+
+    <div className="chat-input-row" style={{flexShrink:0}}>
+      <textarea
+        ref={textRef}
+        className="chat-textarea"
+        placeholder="Введите сообщение... (Enter отправить, Shift+Enter новая строка)"
+        value={input}
+        onChange={e=>setInput(e.target.value)}
+        onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}}}
+        rows={1}
+        style={{height:'auto'}}
+        onInput={e=>{e.target.style.height='auto';e.target.style.height=Math.min(e.target.scrollHeight,120)+'px'}}
+      />
+      <button className="btn btn-em" onClick={()=>send()} disabled={loading||!input.trim()} style={{padding:'10px 16px',flexShrink:0}}>
+        {Ic.send}
+      </button>
+    </div>
+  </div>;
+}
+
+/* ── AGENTS TAB ── */
+function AgentsTab({agents,onRefresh}){
+  const [filter,setFilter]=useState('all');
+  const [search,setSearch]=useState('');
+  const [selected,setSelected]=useState(null);
+
+  const filtered=agents.filter(a=>{
+    const matchF=filter==='all'||(filter==='working'&&a.status==='working')||(filter==='idle'&&(!a.status||a.status==='idle'));
+    const matchS=!search||a.name?.toLowerCase().includes(search.toLowerCase())||(a.description||'').toLowerCase().includes(search.toLowerCase());
+    return matchF&&matchS;
+  });
+
+  const statusIcon={working:'●',idle:'○',error:'⚠'};
+  const statusColor={working:'var(--em)',idle:'var(--tx3)',error:'var(--re)'};
+
+  return <div>
+    <div className="section-hd">
+      <div>
+        <div className="section-title">🤖 Агенты системы</div>
+        <div className="section-sub">{agents.length} зарегистрировано · {agents.filter(a=>a.status==='working').length} активны</div>
+      </div>
+      <button className="btn btn-em" onClick={onRefresh}>{Ic.refresh} Обновить</button>
+    </div>
+
+    <div style={{display:'flex',gap:10,marginBottom:16}}>
+      <input className="input" placeholder="🔍 Поиск агента..." value={search} onChange={e=>setSearch(e.target.value)} style={{maxWidth:260}}/>
+      <div className="tab-bar" style={{margin:0}}>
+        {[{id:'all',l:'Все'},{id:'working',l:'Активные'},{id:'idle',l:'Ожидают'}].map(f=>
+          <button key={f.id} className={`tab-item ${filter===f.id?'active':''}`} onClick={()=>setFilter(f.id)}>{f.l}</button>
+        )}
+      </div>
+    </div>
+
+    <div className="grid-auto">
+      {filtered.map((a,i)=>{
+        const st=a.status||'idle';
+        const isW=st==='working';
+        return <div key={i} className={`agent-card ${isW?'working':''}`} onClick={()=>setSelected(a===selected?null:a)}>
+          <div className={`agent-dot ${st}`}/>
+          <div style={{flex:1,minWidth:0}}>
+            <div className="agent-name" style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{a.name||a.id}</div>
+            <div className="agent-status">{isW?'⚡ Работает':a.description?.slice(0,40)||'Ожидает задачу'}</div>
+          </div>
+          <span className="badge" style={{background:'transparent',border:'1px solid rgba(255,255,255,.06)',color:statusColor[st]||'var(--tx2)',fontSize:10}}>
+            {statusIcon[st]||'○'}
+          </span>
+        </div>;
+      })}
+    </div>
+
+    {selected && <div className="card" style={{marginTop:16}}>
+      <div style={{display:'flex',justifyContent:'space-between',marginBottom:10}}>
+        <div className="section-title" style={{fontSize:14}}>{selected.name}</div>
+        <button className="btn btn-ghost" style={{padding:'4px 10px',fontSize:12}} onClick={()=>setSelected(null)}>✕</button>
+      </div>
+      <div style={{fontSize:13,color:'var(--tx2)',marginBottom:8}}>{selected.description||'Нет описания'}</div>
+      <div style={{display:'flex',gap:8}}>
+        <span className="badge badge-gray">ID: {selected.id||selected.name}</span>
+        <span className={`badge ${selected.status==='working'?'badge-em':'badge-gray'}`}>{selected.status||'idle'}</span>
+        {selected.type && <span className="badge badge-gray">{selected.type}</span>}
+      </div>
+    </div>}
+
+    {filtered.length===0 && <div style={{textAlign:'center',padding:'40px 0',color:'var(--tx3)'}}>
+      Нет агентов по выбранному фильтру
+    </div>}
+  </div>;
+}
+
+/* ── TRADING TAB ── */
+function TradingTab(){
+  const [pair,setPair]=useState('BTCUSDT');
+  const [chartData,setChartData]=useState(null);
+  const [positions,setPositions]=useState([]);
+  const [signals,setSignals]=useState([]);
+  const canvasRef=useRef(null);
+  const chartRef=useRef(null);
+  const {add}=useContext(ToastCtx);
+
+  const pairs=['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT'];
+
+  useEffect(()=>{
+    api('/api/trading/positions').then(d=>setPositions(d.positions||[])).catch(()=>{});
+    api('/api/trading/signals').then(d=>setSignals(d.signals||[])).catch(()=>{});
+  },[]);
+
+  useEffect(()=>{
+    api('/api/trading/chart?days=7').then(d=>setChartData(d.chart_data||[])).catch(()=>{});
+  },[pair]);
+
+  useEffect(()=>{
+    if(!chartData||!canvasRef.current) return;
+    if(chartRef.current) chartRef.current.destroy();
+    const ctx=canvasRef.current.getContext('2d');
+    const labels=chartData.map((_,i)=>i%8===0?`${Math.round(i/8)}д`:'');
+    const values=chartData.map(d=>d.pnl??0);
+    const grad=ctx.createLinearGradient(0,0,0,200);
+    grad.addColorStop(0,'rgba(16,185,129,.3)');
+    grad.addColorStop(1,'rgba(16,185,129,.0)');
+    chartRef.current=new Chart(ctx,{
+      type:'line',
+      data:{labels,datasets:[{data:values,borderColor:'#10b981',backgroundColor:grad,borderWidth:2,fill:true,tension:.4,pointRadius:0}]},
+      options:{
+        responsive:true,maintainAspectRatio:false,
+        plugins:{legend:{display:false},tooltip:{backgroundColor:'rgba(15,23,42,.9)',titleColor:'#e2e8f0',bodyColor:'#94a3b8',callbacks:{label:ctx=>`P&L: ${ctx.raw.toFixed(2)}$`}}},
+        scales:{
+          x:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#475569',font:{size:10}}},
+          y:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#475569',font:{size:10},callback:v=>v.toFixed(1)+'$'}},
+        },
+      }
+    });
+  },[chartData]);
+
+  return <div>
+    <div className="section-hd">
+      <div>
+        <div className="section-title">📊 Торговля</div>
+        <div className="section-sub">Мониторинг позиций и сигналов</div>
+      </div>
+    </div>
+
+    <div className="tab-bar" style={{width:'fit-content'}}>
+      {pairs.map(p=><button key={p} className={`tab-item ${pair===p?'active':''}`} onClick={()=>setPair(p)}>{p.replace('USDT','')}</button>)}
+    </div>
+
+    <div className="card" style={{marginBottom:16}}>
+      <div className="card-title"><div className="card-title-dot"/>{pair} — P&L График (7 дней)</div>
+      <div className="chart-wrap">
+        <canvas ref={canvasRef}/>
+      </div>
+    </div>
+
+    <div className="grid2">
+      <div className="card">
+        <div className="card-title"><div className="card-title-dot"/>Открытые позиции</div>
+        {positions.length===0
+          ? <div style={{color:'var(--tx2)',fontSize:13,textAlign:'center',padding:'20px 0'}}>
+              <div style={{fontSize:32,marginBottom:8}}>📭</div>
+              Нет открытых позиций<br/>
+              <span style={{fontSize:11,color:'var(--tx3)'}}>Bybit не подключён</span>
+            </div>
+          : positions.map((p,i)=><div key={i} className="card-sm" style={{marginBottom:8}}>
+              <div style={{fontWeight:600}}>{p.symbol}</div>
+              <div style={{fontSize:12,color:'var(--tx2)'}}>{p.side} · {p.size} · {p.pnl?.toFixed(2)}$</div>
+            </div>)
+        }
+      </div>
+      <div className="card">
+        <div className="card-title"><div className="card-title-dot"/>Торговые сигналы</div>
+        {signals.length===0
+          ? <div style={{color:'var(--tx2)',fontSize:13,textAlign:'center',padding:'20px 0'}}>
+              <div style={{fontSize:32,marginBottom:8}}>📡</div>
+              Нет активных сигналов<br/>
+              <span style={{fontSize:11,color:'var(--tx3)'}}>Стратегии не запущены</span>
+            </div>
+          : signals.map((s,i)=><div key={i} className="card-sm" style={{marginBottom:8}}>
+              <div style={{fontWeight:600,color:s.side==='BUY'?'var(--em)':'var(--re)'}}>{s.side} {s.symbol}</div>
+              <div style={{fontSize:12,color:'var(--tx2)'}}>Сила: {s.strength||0}%</div>
+            </div>)
+        }
+        <div style={{marginTop:12,padding:10,background:'var(--bg2)',borderRadius:8,fontSize:12,color:'var(--tx2)'}}>
+          💡 Для торговли настройте Bybit API ключи в Настройках
+        </div>
+      </div>
+    </div>
+  </div>;
+}
+
+/* ── SYSTEM TAB ── */
+function SystemTab(){
+  const [termHistory,setTermHistory]=useState([{type:'sys',text:'MaxAI Terminal v2.0 · Введите команду и нажмите Enter'}]);
+  const [termInput,setTermInput]=useState('');
+  const [termLoading,setTermLoading]=useState(false);
+  const [histIdx,setHistIdx]=useState(-1);
+  const [cmdHistory,setCmdHistory]=useState([]);
+  const [logFile,setLogFile]=useState('brain');
+  const [logContent,setLogContent]=useState('');
+  const [logLoading,setLogLoading]=useState(false);
+  const [logAuto,setLogAuto]=useState(true);
+  const termEnd=useRef(null);
+  const logEnd=useRef(null);
+  const {add}=useContext(ToastCtx);
+
+  useEffect(()=>termEnd.current?.scrollIntoView({behavior:'smooth'}),[termHistory]);
+  useEffect(()=>{if(logAuto)logEnd.current?.scrollIntoView({behavior:'smooth'})},[logContent]);
+
+  useEffect(()=>{loadLog()},[logFile]);
+  useEffect(()=>{
+    if(!logAuto) return;
+    const t=setInterval(loadLog,5000);
+    return ()=>clearInterval(t);
+  },[logFile,logAuto]);
+
+  const loadLog=()=>{
+    setLogLoading(true);
+    api(`/api/logs?file=${logFile}&lines=150`).then(d=>{
+      setLogContent(d.content||d.logs||JSON.stringify(d));
+    }).catch(e=>setLogContent('Ошибка загрузки: '+e.message)).finally(()=>setLogLoading(false));
+  };
+
+  const runCmd=async(cmd)=>{
+    const c=(cmd||termInput).trim();
+    if(!c||termLoading) return;
+    setTermInput('');setHistIdx(-1);
+    setCmdHistory(h=>[c,...h.slice(0,49)]);
+    setTermHistory(h=>[...h,{type:'cmd',text:'$ '+c}]);
+    setTermLoading(true);
+    try{
+      const d=await post('/api/terminal/exec',{cmd:c});
+      if(d.stdout) setTermHistory(h=>[...h,{type:'out',text:d.stdout.trimEnd()}]);
+      if(d.stderr) setTermHistory(h=>[...h,{type:'err',text:d.stderr.trimEnd()}]);
+      if(!d.stdout&&!d.stderr) setTermHistory(h=>[...h,{type:'sys',text:'(нет вывода)'}]);
+    }catch(e){setTermHistory(h=>[...h,{type:'err',text:'Ошибка: '+e.message}])}
+    setTermLoading(false);
+  };
+
+  const logColorClass=(line)=>{
+    if(line.includes('ERROR')||line.includes('CRITICAL')||line.includes('ERR]')) return 'log-error';
+    if(line.includes('WARN')) return 'log-warn';
+    if(line.includes('DEBUG')||line.includes('DBG')) return 'log-debug';
+    return 'log-info';
+  };
+
+  const quickCmds=[
+    'systemctl status personal-ai',
+    'tail -20 /root/my_personal_ai/logs/brain.log',
+    'df -h',
+    'free -h',
+    'uptime',
+    'ps aux | grep python | head -5',
+  ];
+  const logFiles=['brain','execution','risk','websocket','errors'];
+
+  return <div style={{height:'calc(100vh - 48px - 48px - 24px)',overflow:'hidden'}}>
+    <div className="section-hd" style={{flexShrink:0}}>
+      <div>
+        <div className="section-title">🖥️ Система</div>
+        <div className="section-sub">Терминал · Логи · Мониторинг</div>
+      </div>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,height:'calc(100% - 60px)'}}>
+      {/* Terminal */}
+      <div style={{display:'flex',flexDirection:'column',height:'100%'}}>
+        <div className="card-title" style={{marginBottom:8}}><div className="card-title-dot"/>Терминал</div>
+        <div className="terminal" style={{flex:1,minHeight:0}}>
+          <div className="term-quickbtns">
+            {quickCmds.map(c=><button key={c} className="term-qbtn" onClick={()=>runCmd(c)}>{c.slice(0,22)}</button>)}
+          </div>
+          <div className="term-output">
+            {termHistory.map((l,i)=><div key={i} className={`term-line ${l.type==='cmd'?'cmd':l.type==='err'?'err':l.type==='sys'?'sys':''}`}>
+              {l.text}
+            </div>)}
+            {termLoading&&<div className="term-line sys">выполняется...</div>}
+            <div ref={termEnd}/>
+          </div>
+          <div className="term-input-row">
+            <span className="term-prompt">root@apex:~$</span>
+            <input className="term-input" value={termInput} onChange={e=>setTermInput(e.target.value)}
+              placeholder=" команда..."
+              onKeyDown={e=>{
+                if(e.key==='Enter') runCmd();
+                if(e.key==='ArrowUp'){e.preventDefault();const i=Math.min(histIdx+1,cmdHistory.length-1);setHistIdx(i);setTermInput(cmdHistory[i]||'');}
+                if(e.key==='ArrowDown'){e.preventDefault();const i=Math.max(histIdx-1,-1);setHistIdx(i);setTermInput(i===-1?'':cmdHistory[i]||'');}
+                if(e.key==='l'&&e.ctrlKey){e.preventDefault();setTermHistory([{type:'sys',text:'Экран очищен'}]);}
+              }}
+              disabled={termLoading}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Logs */}
+      <div style={{display:'flex',flexDirection:'column',height:'100%'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+          <div className="card-title" style={{margin:0}}><div className="card-title-dot"/>Логи</div>
+          <div style={{display:'flex',gap:6,alignItems:'center'}}>
+            <label style={{display:'flex',alignItems:'center',gap:4,fontSize:12,color:'var(--tx2)',cursor:'pointer'}}>
+              <input type="checkbox" checked={logAuto} onChange={e=>setLogAuto(e.target.checked)} style={{accentColor:'var(--em)'}}/>
+              Авто
+            </label>
+            <button className="btn btn-ghost" style={{padding:'3px 8px',fontSize:11}} onClick={loadLog}>{Ic.refresh}</button>
+          </div>
+        </div>
+        <div className="tab-bar" style={{margin:'0 0 8px',width:'100%',flexWrap:'wrap'}}>
+          {logFiles.map(f=><button key={f} className={`tab-item ${logFile===f?'active':''}`} onClick={()=>setLogFile(f)}>{f}</button>)}
+        </div>
+        <div className="log-viewer" style={{flex:1,minHeight:0}}>
+          {logLoading&&!logContent&&<div style={{color:'var(--tx3)',fontSize:12,textAlign:'center',padding:20}}>Загрузка...</div>}
+          {logContent.split('\n').map((line,i)=><div key={i} className={`log-line ${logColorClass(line)}`}>{line}</div>)}
+          <div ref={logEnd}/>
+        </div>
+      </div>
+    </div>
+  </div>;
+}
+
+/* ── SETTINGS TAB ── */
+function SettingsTab(){
+  const {add}=useContext(ToastCtx);
+  const [providers,setProviders]=useState({});
+  const [config,setConfig]=useState({});
+  const [selfTest,setSelfTest]=useState(null);
+  const [testLoading,setTestLoading]=useState(false);
+  const [restartConfirm,setRestartConfirm]=useState(false);
+  const [tab,setTab]=useState('providers');
+
+  useEffect(()=>{
+    api('/api/llm/status').then(d=>{
+      if(d.providers) setProviders(d.providers);
+      else setProviders(d);
+    }).catch(()=>{});
+    api('/api/config').then(d=>setConfig(d.config||{})).catch(()=>{});
+  },[]);
+
+  const runTest=async()=>{
+    setTestLoading(true);
+    try{
+      const d=await post('/api/system/self-test',{});
+      setSelfTest(d);
+      add(`Тест завершён: ${d.passed}/${d.total} прошло`,'ok');
+    }catch(e){add('Ошибка теста: '+e.message,'err')}
+    setTestLoading(false);
+  };
+
+  const doRestart=async()=>{
+    try{
+      await post('/api/system/restart',{});
+      add('Сервис перезапускается...','warn');
+      setRestartConfirm(false);
+    }catch(e){add('Ошибка перезапуска','err')}
+  };
+
+  const sensitiveKeys=['TOKEN','KEY','SECRET','PASSWORD','PASS'];
+  const isSensitive=k=>sensitiveKeys.some(s=>k.toUpperCase().includes(s));
+
+  const providerArr=Array.isArray(providers)?providers:Object.entries(providers).map(([k,v])=>({name:k,...v}));
+
+  return <div>
+    <div className="section-hd">
+      <div>
+        <div className="section-title">⚙️ Сервис и настройки</div>
+        <div className="section-sub">Управление системой, провайдеры, конфигурация</div>
+      </div>
+    </div>
+
+    <div className="tab-bar" style={{width:'fit-content',marginBottom:20}}>
+      {[{id:'providers',l:'🔌 Провайдеры'},{id:'config',l:'📋 Конфиг'},{id:'control',l:'🎛 Управление'}].map(t=>
+        <button key={t.id} className={`tab-item ${tab===t.id?'active':''}`} onClick={()=>setTab(t.id)}>{t.l}</button>
+      )}
+    </div>
+
+    {tab==='providers' && <div>
+      <div className="grid2">
+        {providerArr.map((p,i)=>{
+          const ok=p.available!==false&&p.status!=='error'&&p.available!==0;
+          return <div key={i} className="provider-card">
+            <div>
+              <div className="provider-name">{p.name||p.provider||Object.keys(providers)[i]}</div>
+              <div className="provider-detail">{p.model||p.current_model||'—'}</div>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}}>
+              <span className={`badge ${ok?'badge-em':'badge-re'}`}>{ok?'✓ OK':'✕ OFF'}</span>
+              {p.calls_today!==undefined&&<span style={{fontSize:10,color:'var(--tx3)'}}>{p.calls_today} вызовов</span>}
+            </div>
+          </div>;
+        })}
+        {providerArr.length===0&&<div style={{color:'var(--tx2)',gridColumn:'1/-1',textAlign:'center',padding:20}}>Загрузка провайдеров...</div>}
+      </div>
+    </div>}
+
+    {tab==='config' && <div>
+      <div className="card">
+        <div className="card-title"><div className="card-title-dot"/>Конфигурация .env (ключи скрыты)</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'4px 24px'}}>
+          {Object.entries(config).slice(0,40).map(([k,v])=><div key={k} style={{display:'flex',justifyContent:'space-between',padding:'5px 0',borderBottom:'1px solid rgba(255,255,255,.04)',fontSize:12}}>
+            <span style={{color:'var(--tx2)',fontWeight:500}}>{k}</span>
+            <span style={{color:isSensitive(k)?'var(--am)':'var(--tx)',fontFamily:'monospace',fontSize:11,maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}
+              title={String(v)}>
+              {isSensitive(k)?'••••••••':String(v).slice(0,30)||'—'}
+            </span>
+          </div>)}
+          {Object.keys(config).length===0&&<div style={{color:'var(--tx2)',gridColumn:'1/-1',padding:16,textAlign:'center'}}>Загрузка конфигурации...</div>}
+        </div>
+      </div>
+    </div>}
+
+    {tab==='control' && <div>
+      <div className="grid2">
+        <div className="card">
+          <div className="card-title"><div className="card-title-dot"/>Self-тест системы</div>
+          <button className="btn btn-em" onClick={runTest} disabled={testLoading} style={{marginBottom:14,width:'100%',justifyContent:'center'}}>
+            {testLoading?'⏳ Тестирование...':'▶ Запустить тест'}
+          </button>
+          {selfTest&&<div>
+            <div style={{textAlign:'center',marginBottom:12}}>
+              <span style={{fontSize:36,fontWeight:700,color:selfTest.passed===selfTest.total?'var(--em)':'var(--am)'}}>{selfTest.passed}</span>
+              <span style={{fontSize:20,color:'var(--tx2)'}}>/{selfTest.total}</span>
+            </div>
+            {Object.entries(selfTest.results||{}).map(([k,v])=>{
+              const ok=v==='ok'||Array.isArray(v)||typeof v==='number';
+              return <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'6px 0',borderBottom:'1px solid rgba(255,255,255,.04)',fontSize:13}}>
+                <span>{k}</span>
+                <span className={`badge ${ok?'badge-em':'badge-re'}`}>
+                  {Array.isArray(v)?v.length+'шт':String(v).slice(0,20)}
+                </span>
+              </div>;
+            })}
+          </div>}
+        </div>
+        <div className="card">
+          <div className="card-title"><div className="card-title-dot"/>Управление сервисом</div>
+          <div style={{display:'flex',flexDirection:'column',gap:10}}>
+            {!restartConfirm
+              ? <button className="btn btn-danger" onClick={()=>setRestartConfirm(true)} style={{justifyContent:'center'}}>
+                  🔄 Перезапустить сервис
+                </button>
+              : <div>
+                  <div style={{fontSize:13,color:'var(--am)',marginBottom:10}}>⚠️ Сервис перезапустится. Все активные задачи будут прерваны. Продолжить?</div>
+                  <div style={{display:'flex',gap:8}}>
+                    <button className="btn btn-danger" onClick={doRestart} style={{flex:1,justifyContent:'center'}}>Да, перезапустить</button>
+                    <button className="btn btn-ghost" onClick={()=>setRestartConfirm(false)} style={{flex:1,justifyContent:'center'}}>Отмена</button>
+                  </div>
+                </div>
+            }
+            <div className="card-sm" style={{fontSize:12,color:'var(--tx2)'}}>
+              <div style={{fontWeight:600,marginBottom:4,color:'var(--tx)'}}>Информация о сервере</div>
+              <div>Хост: 77.90.2.171</div>
+              <div>Порт: 8090 (nginx → 8080)</div>
+              <div>Путь: /root/my_personal_ai</div>
+              <div>Сервис: personal-ai.service</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>}
+  </div>;
+}
+
+/* ── EARNINGS TAB ── */
+function EarningsTab(){
+  const [data,setData]=useState(null);
+  const [ledger,setLedger]=useState([]);
+  const canvasRef=useRef(null);
+  const chartRef=useRef(null);
+  useEffect(()=>{
+    api('/api/v5/earnings').then(d=>setData(d)).catch(()=>{});
+    api('/api/earnings/ledger').then(d=>setLedger(d.entries||d.ledger||[])).catch(()=>{});
+  },[]);
+  useEffect(()=>{
+    if(!data?.streams||!canvasRef.current) return;
+    if(chartRef.current) chartRef.current.destroy();
+    const ctx=canvasRef.current.getContext('2d');
+    const labels=data.streams.map(s=>s.name.split(' ')[0]);
+    const vals=data.streams.map(s=>Math.abs(s.amount)||0.1);
+    const colors=['#10b981','#f59e0b','#3b82f6','#8b5cf6'];
+    chartRef.current=new Chart(ctx,{type:'doughnut',data:{labels,datasets:[{data:vals,backgroundColor:colors.map(c=>c+'33'),borderColor:colors,borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#94a3b8',font:{size:11}}}}}});
+  },[data]);
+  const streamIcon={USD:'$',RUB:'₽'};
+  const statusColor={active:'var(--em)',setup:'var(--am)',scanning:'var(--bl)',planning:'var(--tx2)'};
+  return <div>
+    <div className="section-hd">
+      <div><div className="section-title">💰 Доходы и заработок</div>
+      <div className="section-sub">Все источники дохода в реальном времени</div></div>
+    </div>
+    {data && <div className="grid4" style={{marginBottom:20}}>
+      <div className="stat-card em">
+        <div className="stat-label">Итого USD</div>
+        <div className={`stat-value ${data.total_usd>=0?'em':''}`} style={data.total_usd<0?{color:'var(--re)'}:{}}>{data.total_usd>=0?'+':''}{(data.total_usd||0).toFixed(2)}$</div>
+        <div className="stat-sub">все источники</div>
+      </div>
+      <div className="stat-card bl">
+        <div className="stat-label">Торговля P&L</div>
+        <div className={`stat-value`} style={{color:data.trading_pnl>=0?'var(--em)':'var(--re)'}}>{data.trading_pnl>=0?'+':''}{(data.trading_pnl||0).toFixed(2)}$</div>
+        <div className="stat-sub">{data.trades_total||0} сделок всего</div>
+      </div>
+      <div className="stat-card am">
+        <div className="stat-label">Источников дохода</div>
+        <div className="stat-value am">{data.streams?.length||0}</div>
+        <div className="stat-sub">настроено</div>
+      </div>
+      <div className="stat-card pu">
+        <div className="stat-label">Активных потоков</div>
+        <div className="stat-value pu">{data.streams?.filter(s=>s.status==='active').length||0}</div>
+        <div className="stat-sub">зарабатывают сейчас</div>
+      </div>
+    </div>}
+    <div className="grid2" style={{marginBottom:16}}>
+      <div className="card">
+        <div className="card-title"><div className="card-title-dot"/>Источники дохода</div>
+        {data?.streams?.map((s,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:'1px solid rgba(255,255,255,.04)'}}>
+          <div style={{display:'flex',alignItems:'center',gap:10}}>
+            <span style={{fontSize:20}}>{s.icon}</span>
+            <div>
+              <div style={{fontWeight:600,fontSize:13}}>{s.name}</div>
+              <div style={{fontSize:11,color:'var(--tx2)'}}>
+                <span style={{color:statusColor[s.status]||'var(--tx2)'}}>● {s.status}</span>
+              </div>
+            </div>
+          </div>
+          <div style={{textAlign:'right'}}>
+            <div style={{fontWeight:700,color:s.amount>0?'var(--em)':s.amount<0?'var(--re)':'var(--tx2)'}}>
+              {s.amount>0?'+':''}{s.amount} {s.currency}
+            </div>
+          </div>
+        </div>)}
+        {!data && <div style={{color:'var(--tx2)',textAlign:'center',padding:20}}>Загрузка...</div>}
+      </div>
+      <div className="card">
+        <div className="card-title"><div className="card-title-dot"/>Распределение доходов</div>
+        <div style={{height:180,position:'relative'}}>
+          <canvas ref={canvasRef}/>
+        </div>
+        <div style={{marginTop:12,padding:10,background:'var(--bg2)',borderRadius:8,fontSize:12,color:'var(--tx2)'}}>
+          💡 Для подключения Bybit настройте API ключи в Сервис → Конфиг
+        </div>
+      </div>
+    </div>
+    <div className="card">
+      <div className="card-title"><div className="card-title-dot"/>История операций</div>
+      {ledger.length>0
+        ? ledger.slice(0,15).map((e,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',padding:'6px 0',borderBottom:'1px solid rgba(255,255,255,.04)',fontSize:12}}>
+            <span style={{color:'var(--tx2)'}}>{new Date((e.ts||e.timestamp||0)*1000).toLocaleString('ru')}</span>
+            <span>{e.description||e.type||e.action||'—'}</span>
+            <span style={{color:(e.amount||0)>0?'var(--em)':'var(--re)',fontWeight:600}}>{(e.amount||0)>0?'+':''}{e.amount||0} {e.currency||'USD'}</span>
+          </div>)
+        : <div style={{color:'var(--tx2)',textAlign:'center',padding:'20px 0',fontSize:13}}>
+            <div style={{fontSize:28,marginBottom:8}}>📊</div>
+            История операций пуста. Начните торговать или настройте источники дохода.
+          </div>
+      }
+    </div>
+  </div>;
+}
+
+/* ── PROJECTS TAB ── */
+function ProjectsTab(){
+  const {add}=useContext(ToastCtx);
+  const [projects,setProjects]=useState([]);
+  const [newName,setNewName]=useState('');
+  const [newType,setNewType]=useState('custom');
+  const [creating,setCreating]=useState(false);
+  const [showForm,setShowForm]=useState(false);
+  const [active,setActive]=useState(null); // selected project for chat
+  const [msgs,setMsgs]=useState([]);
+  const [input,setInput]=useState('');
+  const [sending,setSending]=useState(false);
+  const chatBottom=useRef(null);
+  const inputRef=useRef(null);
+
+  // ── localStorage helpers ──────────────────────────────────────────
+  const lsKey=(pid)=>'proj_chat_'+pid;
+  const saveHistory=(pid,m)=>{try{localStorage.setItem(lsKey(pid),JSON.stringify(m.slice(-80)));}catch(e){}};
+  const loadHistory=(pid)=>{try{const s=localStorage.getItem(lsKey(pid));return s?JSON.parse(s):null;}catch(e){return null;}};
+
+  useEffect(()=>{
+    api('/api/v5/projects').then(d=>setProjects(d.projects||[])).catch(()=>{});
+  },[]);
+  useEffect(()=>{chatBottom.current?.scrollIntoView({behavior:'smooth'})},[msgs]);
+  // Auto-save history whenever msgs change
+  useEffect(()=>{if(active&&msgs.length>1)saveHistory(active.id,msgs);},[msgs,active]);
+
+  const refresh=()=>api('/api/v5/projects').then(d=>setProjects(d.projects||[])).catch(()=>{});
+  const createProject=async()=>{
+    if(!newName.trim()) return;
+    setCreating(true);
+    try{
+      await post('/api/projects',{name:newName,project_type:newType,description:''});
+      add('Проект создан!','ok');
+      setNewName('');setShowForm(false);refresh();
+    }catch(e){add('Ошибка: '+e.message,'err')}
+    setCreating(false);
+  };
+
+  const openProject=(p)=>{
+    setActive(p);
+    // Load saved history or show welcome
+    const saved=loadHistory(p.id);
+    if(saved&&saved.length>0){
+      setMsgs(saved);
+    }else{
+      setMsgs([{role:'ai',text:`**${p.name}** — проект открыт.\n\nЯ знаю всё об этом проекте. Цель: ${p.description||'—'}. Прогресс: ${p.progress||0}%.\n\nЧто делаем дальше?`}]);
+    }
+    setTimeout(()=>inputRef.current?.focus(),100);
+  };
+
+  // Auto-resize textarea
+  const autoResize=(el)=>{if(!el)return;el.style.height='auto';el.style.height=Math.min(el.scrollHeight,200)+'px';};
+
+  const sendMsg=async()=>{
+    if(!input.trim()||sending||!active) return;
+    const userMsg=input.trim(); setInput(''); setSending(true);
+    if(inputRef.current){inputRef.current.style.height='44px';}
+    setMsgs(m=>[...m,{role:'user',text:userMsg}]);
+    try{
+      const ctx=`[ПРОЕКТ: ${active.name} | Тип: ${active.type} | Прогресс: ${active.progress||0}% | Описание: ${active.description||'—'}]\n\n`;
+      const d=await post('/api/chat',{text:ctx+userMsg,session_id:'project_'+active.id,context:'project',project:active.name});
+      setMsgs(m=>[...m,{role:'ai',text:d.response||d.text||d.answer||'ИИ думает...'}]);
+    }catch(e){setMsgs(m=>[...m,{role:'ai',text:'Ошибка: '+e.message}])}
+    setSending(false);
+  };
+
+  const typeIcon={trading:'📈',ecommerce:'🛒',sourcing:'☕',freelance:'💼',custom:'📁',planning:'🎯',export:'🚢',passive_income:'💰',ai_agent:'🤖',trading_bot:'📊',web_service:'🌐',automation:'⚙️'};
+  const statusColor={active:'var(--em)',running:'var(--em)',failed:'var(--re)',error:'var(--re)',planning:'var(--am)',paused:'var(--tx2)',completed:'var(--bl)',created:'var(--tx2)'};
+
+  if(active) return <div style={{minHeight:'calc(100vh - 160px)',display:'flex',flexDirection:'column',gap:0,padding:'0 0 16px'}}>
+    {/* Project chat header */}
+    <div className="section-hd" style={{marginBottom:12}}>
+      <div style={{display:'flex',alignItems:'center',gap:12}}>
+        <button className="btn btn-ghost" onClick={()=>setActive(null)} style={{padding:'6px 10px'}}>← Назад</button>
+        <button className="btn btn-ghost" onClick={()=>{if(window.confirm('Очистить историю чата?')){localStorage.removeItem(lsKey(active.id));setMsgs([{role:'ai',text:'История очищена. Начнём заново!'}]);}}} style={{padding:'6px 10px',fontSize:11,color:'var(--tx3)'}}>🗑 Очистить</button>
+        <span style={{fontSize:22}}>{typeIcon[active.type]||'📁'}</span>
+        <div>
+          <div style={{fontWeight:700,fontSize:16}}>{active.name}</div>
+          <div style={{fontSize:11,color:'var(--tx2)'}}>{active.type} · {active.progress||0}% · <span style={{color:'var(--em)'}}>{active.status}</span></div>
+        </div>
+      </div>
+      {active.tasks&&active.tasks.length>0&&<div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+        {active.tasks.slice(0,3).map((t,i)=>{const tStr=typeof t==='string'?t:(t.name||t.title||JSON.stringify(t)).slice(0,60);return <span key={i} className="badge badge-gray" style={{fontSize:10,cursor:'pointer',background:t.status==='completed'?'rgba(0,255,136,.1)':undefined}} onClick={()=>setInput(tStr)}>{tStr.length>35?tStr.slice(0,35)+'…':tStr}</span>})}
+      </div>}
+    </div>
+    {/* Chat messages */}
+    <div style={{flex:1,overflowY:'auto',display:'flex',flexDirection:'column',gap:10,padding:'4px 0',minHeight:320,maxHeight:480}}>
+      {msgs.map((m,i)=><div key={i} style={{display:'flex',justifyContent:m.role==='user'?'flex-end':'flex-start'}}>
+        <div style={{maxWidth:'82%',padding:'10px 14px',borderRadius:12,fontSize:13,lineHeight:1.55,
+          background:m.role==='user'?'var(--em)':'var(--bg2)',
+          color:m.role==='user'?'#000':'var(--tx)',
+          borderBottomRightRadius:m.role==='user'?2:12,
+          borderBottomLeftRadius:m.role==='ai'?2:12,
+          whiteSpace:'pre-wrap'}}>
+          {m.text}
+        </div>
+      </div>)}
+      {sending&&<div style={{color:'var(--tx3)',fontSize:12,paddingLeft:4}}>ИИ думает…</div>}
+      <div ref={chatBottom}/>
+    </div>
+    {/* Input */}
+    <div style={{display:'flex',gap:8,paddingTop:12,borderTop:'1px solid var(--bd)',alignItems:'flex-end'}}>
+      <textarea ref={inputRef}
+        style={{flex:1,background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:12,padding:'10px 14px',
+          color:'var(--tx)',fontFamily:'var(--font)',fontSize:14,resize:'none',outline:'none',
+          minHeight:44,maxHeight:200,lineHeight:1.5,overflowY:'auto',
+          transition:'border-color .2s, height .1s'}}
+        placeholder="Что делаем по проекту? (Enter — отправить, Shift+Enter — новая строка)"
+        value={input}
+        onChange={e=>{setInput(e.target.value);autoResize(e.target);}}
+        onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();}}}
+        onFocus={e=>e.target.style.borderColor='rgba(0,212,255,.4)'}
+        onBlur={e=>e.target.style.borderColor='var(--border)'}
+        rows={1}/>
+      <button className="btn btn-em" onClick={sendMsg} disabled={sending||!input.trim()}
+        style={{minWidth:44,height:44,flexShrink:0}}>
+        {sending?'…':'→'}
+      </button>
+    </div>
+  </div>;
+
+  return <div>
+    <div className="section-hd">
+      <div><div className="section-title">📁 Проекты</div>
+      <div className="section-sub">Нажмите на проект чтобы продолжить работу с ИИ</div></div>
+      <div style={{display:'flex',gap:8}}>
+        <button className="btn btn-ghost" onClick={refresh}>{Ic.refresh}</button>
+        <button className="btn btn-em" onClick={()=>setShowForm(!showForm)}>+ Новый проект</button>
+      </div>
+    </div>
+    {showForm && <div className="card" style={{marginBottom:16}}>
+      <div className="card-title"><div className="card-title-dot"/>Создать проект</div>
+      <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
+        <input className="input" placeholder="Название проекта" value={newName} onChange={e=>setNewName(e.target.value)} style={{flex:1,minWidth:200}} onKeyDown={e=>e.key==='Enter'&&createProject()}/>
+        <select className="input" value={newType} onChange={e=>setNewType(e.target.value)} style={{width:160}}>
+          <option value="custom">Кастомный</option>
+          <option value="trading">Торговля</option>
+          <option value="ecommerce">Маркетплейс</option>
+          <option value="sourcing">Закупки</option>
+          <option value="freelance">Фриланс</option>
+          <option value="passive_income">Пассивный доход</option>
+          <option value="export">Экспорт</option>
+        </select>
+        <button className="btn btn-em" onClick={createProject} disabled={creating||!newName.trim()}>
+          {creating?'Создаю...':'✓ Создать'}
+        </button>
+      </div>
+    </div>}
+    <div className="grid2">
+      {projects.map((p,i)=><div key={i} className="card" style={{cursor:'pointer',transition:'transform .15s,box-shadow .15s'}}
+        onClick={()=>openProject(p)}
+        onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-2px)';e.currentTarget.style.boxShadow='0 8px 32px rgba(0,255,136,.12)'}}
+        onMouseLeave={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow=''}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12}}>
+          <div style={{display:'flex',alignItems:'center',gap:10}}>
+            <span style={{fontSize:24}}>{typeIcon[p.type]||'📁'}</span>
+            <div>
+              <div style={{fontWeight:700,fontSize:14}}>{p.name}</div>
+              <div style={{fontSize:11,color:'var(--tx2)',marginTop:2}}>{p.type||'custom'}</div>
+            </div>
+          </div>
+          <span className="badge" style={{background:'transparent',border:'1px solid',borderColor:statusColor[p.status]+'44',color:statusColor[p.status]||'var(--tx2)'}}>
+            {p.status}
+          </span>
+        </div>
+        <div style={{marginBottom:8}}>
+          <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:4}}>
+            <span style={{color:'var(--tx2)'}}>Прогресс</span>
+            <span style={{fontWeight:600}}>{p.progress||0}%</span>
+          </div>
+          <div className="progress-wrap">
+            <div className="progress-bar em" style={{width:`${p.progress||0}%`}}/>
+          </div>
+        </div>
+        {/* Agents row */}
+        {(()=>{
+          let agents=[];
+          try{agents=JSON.parse(p.tags||'[]');}catch(e){}
+          if(!agents.length && p.config){try{agents=JSON.parse(p.config).agents||[];}catch(e){}}
+          return agents.length>0?<div style={{marginBottom:8,display:'flex',flexWrap:'wrap',gap:4}}>
+            <span style={{fontSize:10,color:'var(--tx3)',marginRight:2}}>🤖</span>
+            {agents.slice(0,4).map((a,i)=><span key={i} style={{fontSize:10,background:'var(--bg3)',color:'var(--em)',padding:'2px 6px',borderRadius:4,border:'1px solid var(--em)22'}}>{a}</span>)}
+            {agents.length>4&&<span style={{fontSize:10,color:'var(--tx3)'}}>+{agents.length-4}</span>}
+          </div>:null;
+        })()}
+        {/* Schedule */}
+        {(()=>{
+          let sched='';
+          try{sched=JSON.parse(p.config||'{}').schedule||'';}catch(e){}
+          return sched?<div style={{fontSize:10,color:'var(--tx3)',marginBottom:6,fontStyle:'italic'}}>⏱ {sched}</div>:null;
+        })()}
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div style={{display:'flex',alignItems:'center',gap:6}}>
+            <span style={{fontSize:10,background:'#00ff8822',color:'var(--em)',padding:'2px 7px',borderRadius:10,fontWeight:600,letterSpacing:0.3}}>24/7 AUTO</span>
+            <span style={{fontSize:10,color:'var(--tx3)'}}>
+              {p.updated_at?new Date(p.updated_at*1000).toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'}):'—'}
+            </span>
+          </div>
+          <span style={{fontSize:11,color:'var(--em)',fontWeight:600}}>Открыть →</span>
+        </div>
+      </div>)}
+    </div>
+    {projects.length===0 && <div style={{textAlign:'center',padding:'40px 0',color:'var(--tx2)'}}>
+      <div style={{fontSize:40,marginBottom:12}}>📭</div>
+      Нет активных проектов. Создайте первый!
+    </div>}
+  </div>;
+}
+
+/* ── ACTIVITY TAB ── */
+function ActivityTab(){
+  const [activity,setActivity]=useState([]);
+  const [queue,setQueue]=useState({});
+  const [auto,setAuto]=useState(true);
+  const [agents,setAgents]=useState({total:0,working:0,details:[]});
+  const bottom=useRef(null);
+  useEffect(()=>{
+    const load=()=>{
+      api('/api/v5/activity').then(d=>setActivity(d.activity||[])).catch(()=>{});
+      api('/api/v5/agents/stats').then(d=>setAgents(d)).catch(()=>{});
+      api('/api/v5/tasks/queue').then(d=>setQueue(d.queue||{})).catch(()=>{});
+    };
+    load();
+    if(auto){const t=setInterval(load,4000);return()=>clearInterval(t);}
+  },[auto]);
+  useEffect(()=>{if(auto)bottom.current?.scrollIntoView({behavior:'smooth'})},[activity]);
+  const colorLine=(l)=>{
+    if(l.includes('ERROR')) return 'var(--re)';
+    if(l.includes('Done:')||l.includes('Process:')) return 'var(--em)';
+    if(l.includes('intent:')||l.includes('DEBUG')) return 'var(--tx3)';
+    return 'var(--tx2)';
+  };
+  const working=agents.details?.filter(a=>a.status==='working')||[];
+  return <div>
+    <div className="section-hd">
+      <div><div className="section-title">🎯 Активность ИИ</div>
+      <div className="section-sub">Что делают агенты прямо сейчас</div></div>
+      <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:'var(--tx2)',cursor:'pointer'}}>
+        <input type="checkbox" checked={auto} onChange={e=>setAuto(e.target.checked)} style={{accentColor:'var(--em)'}}/>
+        Авто-обновление (4с)
+      </label>
+    </div>
+    <div className="grid4" style={{marginBottom:16}}>
+      {[
+        {l:'Всего агентов',v:agents.total,c:'em'},
+        {l:'Работают',v:agents.working,c:'am'},
+        {l:'Ожидают',v:agents.idle||agents.total-agents.working,c:'bl'},
+        {l:'В очереди задач',v:queue.pending||0,c:'pu'},
+      ].map((s,i)=><div key={i} className={`stat-card ${s.c}`}>
+        <div className="stat-label">{s.l}</div>
+        <div className={`stat-value ${s.c}`}>{s.v}</div>
+      </div>)}
+    </div>
+    {working.length>0 && <div className="card" style={{marginBottom:16}}>
+      <div className="card-title"><div className="card-title-dot" style={{background:'var(--em)',animation:'pulse 1s infinite'}}/>Активные агенты</div>
+      <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
+        {working.map((a,i)=><div key={i} className="badge badge-em" style={{fontSize:12,padding:'4px 10px'}}>
+          ⚡ {a.name}
+        </div>)}
+      </div>
+    </div>}
+    <div className="grid2">
+      <div className="card" style={{height:440}}>
+        <div className="card-title"><div className="card-title-dot"/>Лог активности (обновляется)</div>
+        <div style={{flex:1,overflowY:'auto',fontFamily:'monospace',fontSize:11,lineHeight:1.6,height:'360px',overflowY:'auto'}}>
+          {activity.map((line,i)=><div key={i} style={{color:colorLine(line),padding:'1px 0',wordBreak:'break-all'}}>{line}</div>)}
+          {activity.length===0&&<div style={{color:'var(--tx3)',textAlign:'center',paddingTop:40}}>Ожидание активности...</div>}
+          <div ref={bottom}/>
+        </div>
+      </div>
+      <div className="card">
+        <div className="card-title"><div className="card-title-dot"/>Все 108 агентов по категориям</div>
+        <div style={{overflowY:'auto',maxHeight:380}}>
+          {[
+            {cat:'🔐 Торговля',kw:['btc','eth','alt','fund','liq','onchain','dex','defi','crypto','trading']},
+            {cat:'🛒 Wildberries',kw:['wb','wbsales','wbprice','wbads','wbcomp','wbstock','wbreview','ozon','avito']},
+            {cat:'☕ Кофе',kw:['coffee','colombia']},
+            {cat:'💼 Фриланс',kw:['upwork','kwork','invoice','contract','client','deadline','freelance']},
+            {cat:'📢 Маркетинг',kw:['seo','copy','telegram','youtube','adcopy','brand','viral']},
+            {cat:'📊 Данные',kw:['scraper','pdf','stat','competitor','trend','report','cleaner']},
+            {cat:'⚙️ Система',kw:['git','docker','database','apitester','backup','file','alert']},
+            {cat:'💰 Финансы',kw:['tax','expense','profitloss','currency','cashflow']},
+            {cat:'🤖 ИИ',kw:['prompt','rag','model']},
+          ].map(({cat,kw})=>{
+            const catAgents=agents.details?.filter(a=>kw.some(k=>a.name.toLowerCase().includes(k)))||[];
+            if(catAgents.length===0) return null;
+            return <div key={cat} style={{marginBottom:10}}>
+              <div style={{fontSize:12,fontWeight:600,color:'var(--tx)',marginBottom:4}}>{cat} <span style={{color:'var(--tx3)'}}>({catAgents.length})</span></div>
+              <div style={{display:'flex',flexWrap:'wrap',gap:4}}>
+                {catAgents.map(a=><span key={a.name} className="badge badge-gray" style={{fontSize:10}}>{a.name}</span>)}
+              </div>
+            </div>;
+          })}
+        </div>
+      </div>
+    </div>
+  </div>;
+}
+
+/* ── ANALYTICS TAB ── */
+function AnalyticsTab(){
+  const [data,setData]=useState(null);
+  const canvasRef=useRef(null);
+  const chartRef=useRef(null);
+  useEffect(()=>{
+    api('/api/v5/analytics').then(d=>setData(d)).catch(()=>{});
+  },[]);
+  useEffect(()=>{
+    if(!data?.llm?.providers||!canvasRef.current) return;
+    if(chartRef.current) chartRef.current.destroy();
+    const ctx=canvasRef.current.getContext('2d');
+    const prov=Object.entries(data.llm.providers||{});
+    const labels=prov.map(([k])=>k);
+    const calls=prov.map(([,v])=>v.calls||0);
+    const colors=['#10b981','#f59e0b','#3b82f6','#8b5cf6','#ef4444','#06b6d4','#84cc16','#f97316','#ec4899','#14b8a6'];
+    chartRef.current=new Chart(ctx,{type:'bar',data:{labels,datasets:[{label:'Вызовов',data:calls,backgroundColor:colors.map(c=>c+'66'),borderColor:colors,borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#475569',font:{size:10}}},y:{ticks:{color:'#475569'}}}}});
+  },[data]);
+  const llm=data?.llm||{};
+  const providers=Object.entries(llm.providers||{});
+  const totalCalls=llm.total_calls||0;
+  const cost=llm.daily_cost_usd||0;
+  const limit=llm.daily_limit_usd||1.0;
+  return <div>
+    <div className="section-hd">
+      <div><div className="section-title">📊 Аналитика ИИ</div>
+      <div className="section-sub">Статистика использования, расходы, эффективность</div></div>
+      <button className="btn btn-ghost" onClick={()=>api('/api/v5/analytics').then(d=>setData(d))}>{Ic.refresh} Обновить</button>
+    </div>
+    <div className="grid4" style={{marginBottom:20}}>
+      <div className="stat-card em">
+        <div className="stat-label">LLM вызовов всего</div>
+        <div className="stat-value em">{totalCalls}</div>
+        <div className="stat-sub">с момента запуска</div>
+      </div>
+      <div className="stat-card am">
+        <div className="stat-label">Расход сегодня</div>
+        <div className="stat-value am">${cost.toFixed(4)}</div>
+        <div className="stat-sub">лимит ${limit}/день</div>
+      </div>
+      <div className="stat-card bl">
+        <div className="stat-label">Провайдеров активно</div>
+        <div className="stat-value bl">{providers.filter(([,v])=>v.available).length}</div>
+        <div className="stat-sub">из {providers.length} подключено</div>
+      </div>
+      <div className="stat-card pu">
+        <div className="stat-label">Записей в базе знаний</div>
+        <div className="stat-value pu">{data?.system?.brain_log_lines||0}</div>
+        <div className="stat-sub">строк в brain.log</div>
+      </div>
+    </div>
+    <div style={{marginBottom:16}}>
+      <div className="card-title" style={{marginBottom:6}}><div className="card-title-dot"/>Бюджет токенов сегодня</div>
+      <div className="progress-wrap" style={{height:10,marginBottom:6}}>
+        <div className="progress-bar" style={{width:`${Math.min(100,(cost/limit)*100)}%`,background:cost/limit>0.8?'var(--re)':cost/limit>0.5?'var(--am)':'var(--em)'}}/>
+      </div>
+      <div style={{fontSize:12,color:'var(--tx2)'}}>${cost.toFixed(4)} / ${limit} ({((cost/limit)*100).toFixed(1)}% использовано)</div>
+    </div>
+    <div className="grid2">
+      <div className="card">
+        <div className="card-title"><div className="card-title-dot"/>Вызовов по провайдерам</div>
+        <div style={{height:180}}><canvas ref={canvasRef}/></div>
+      </div>
+      <div className="card">
+        <div className="card-title"><div className="card-title-dot"/>Статус провайдеров</div>
+        <div style={{overflowY:'auto',maxHeight:220}}>
+          {providers.map(([name,v],i)=><div key={i} style={{display:'flex',justifyContent:'space-between',padding:'6px 0',borderBottom:'1px solid rgba(255,255,255,.04)',fontSize:12}}>
+            <div>
+              <span style={{fontWeight:600,textTransform:'capitalize'}}>{name}</span>
+              {v.latency>0&&<span style={{color:'var(--tx3)',marginLeft:8}}>{v.latency}ms</span>}
+            </div>
+            <div style={{display:'flex',gap:8,alignItems:'center'}}>
+              {v.calls>0&&<span style={{color:'var(--tx2)'}}>{v.calls} вызовов</span>}
+              <span className={`badge ${v.available?'badge-em':'badge-re'}`}>{v.available?'✓ OK':'✕'}</span>
+            </div>
+          </div>)}
+        </div>
+      </div>
+    </div>
+  </div>;
+}
+
+
+
+
+/* ── HYPERION ENGINE v12 TAB ── */
+function HyperionTab(){
+  const [section,setSection]=React.useState('overview');
+  const [dash,setDash]=React.useState(null);
+  const [health,setHealth]=React.useState(null);
+  const [tasks,setTasks]=React.useState([]);
+  const [caps,setCaps]=React.useState([]);
+  const [logs,setLogs]=React.useState([]);
+  const [loading,setLoading]=React.useState(true);
+  const [err,setErr]=React.useState('');
+
+  // Submit form state
+  const [form,setForm]=React.useState({
+    desc:'', dept:'maxai-dev', market:'RU',
+    rev:10, cost:0.5, prob:0.85, urgency:1
+  });
+  const [submitting,setSubmitting]=React.useState(false);
+  const [submitLog,setSubmitLog]=React.useState([]);
+
+  const CP='/api/hyperion';
+
+  async function loadAll(){
+    try{
+      const [hr,dr] = await Promise.all([
+        fetch(CP+'/health',{signal:AbortSignal.timeout(5000)}).then(r=>r.json()),
+        fetch(CP+'/dashboard',{signal:AbortSignal.timeout(5000)}).then(r=>r.json()),
+      ]);
+      setHealth(hr); setDash(dr); setErr('');
+    }catch(e){ setErr(String(e)); }
+    setLoading(false);
+  }
+
+  React.useEffect(()=>{
+    loadAll();
+    const t=setInterval(loadAll,20000);
+    return ()=>clearInterval(t);
+  },[]);
+
+  async function doSubmit(){
+    if(!form.desc.trim()||submitting) return;
+    setSubmitting(true);
+    try{
+      const r=await fetch(CP+'/tasks/submit',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          department_id:form.dept,
+          market_id:form.market,
+          business_context:{description:form.desc,source:'dashboard'},
+          input_data:{task:form.desc},
+          expected_revenue:Number(form.rev),
+          estimated_cost:Number(form.cost),
+          success_probability:Number(form.prob),
+          urgency_score:Number(form.urgency)
+        })
+      });
+      const d=await r.json();
+      const entry={
+        id:(d.task_id||'?').slice(0,8),
+        full_id:d.task_id||'?',
+        desc:form.desc,
+        time:new Date().toLocaleTimeString(),
+        state:d.state||'?',
+        ev:d.expected_value,
+        routed:d.routed
+      };
+      setSubmitLog(l=>[entry,...l.slice(0,29)]);
+      setForm(f=>({...f,desc:''}));
+      setTimeout(loadAll,2000);
+    }catch(e){ setErr(String(e)); }
+    setSubmitting(false);
+  }
+
+  const online=health&&(health.status==='ok'||health.status==='healthy');
+  const sc=online?'var(--em)':loading?'var(--tx3)':'var(--re)';
+  const stC={'ROUTED':'var(--bl)','VALUATED':'var(--pu)','FAILED':'var(--re)','COMPLETED':'var(--em)','PROMOTED':'var(--am)','PENDING':'var(--tx3)'};
+
+  const navItems=[
+    {id:'overview',icon:'⊞',label:'Overview'},
+    {id:'submit',icon:'▶',label:'Отправить'},
+    {id:'tasks',icon:'☰',label:'Задачи'},
+    {id:'capabilities',icon:'⚙',label:'Модули'},
+    {id:'config',icon:'≡',label:'Конфиг'},
+  ];
+
+  const card={background:'var(--card)',border:'1px solid var(--border)',borderRadius:'var(--radius)',padding:'16px'};
+  const label={fontSize:'11px',color:'var(--tx3)',textTransform:'uppercase',letterSpacing:'0.5px',marginBottom:'4px'};
+
+  /* ── OVERVIEW ── */
+  function OverviewSection(){
+    if(loading) return <div style={{color:'var(--tx3)',padding:'40px',textAlign:'center'}}>Подключение...</div>;
+    if(err&&!dash) return <div style={{color:'var(--re)',padding:'20px'}}>✕ {err}</div>;
+    const stats=[
+      {l:'Всего задач',v:dash?.total_tasks??0,c:'var(--em)'},
+      {l:'Revenue (EV)',v:dash?.total_expected_revenue!=null?'$'+Number(dash.total_expected_revenue).toFixed(1):'—',c:'var(--am)'},
+      {l:'Capabilities',v:dash?.capabilities??0,c:'var(--bl)'},
+      {l:'Patterns',v:dash?.patterns_learned??0,c:'var(--pu)'},
+    ];
+    return <div style={{display:'flex',flexDirection:'column',gap:'14px'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:'10px'}}>
+        {stats.map(s=><div key={s.l} style={card}>
+          <div style={label}>{s.l}</div>
+          <div style={{fontSize:'26px',fontWeight:700,color:s.c}}>{s.v}</div>
+        </div>)}
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
+        <div style={card}>
+          <div style={label}>PostgreSQL</div>
+          <div style={{fontSize:'18px',fontWeight:700,color:dash?.pg_ok?'var(--em)':'var(--re)'}}>{dash?.pg_ok?'✓ Online':'✕ Error'}</div>
+        </div>
+        <div style={card}>
+          <div style={label}>RabbitMQ (AMQP)</div>
+          <div style={{fontSize:'18px',fontWeight:700,color:dash?.amqp_ok?'var(--em)':'var(--re)'}}>{dash?.amqp_ok?'✓ Online':'✕ Error'}</div>
+        </div>
+      </div>
+      {dash?.tasks_by_state&&Object.keys(dash.tasks_by_state).length>0&&<div style={card}>
+        <div style={{...label,marginBottom:'12px'}}>Состояния задач</div>
+        <div style={{display:'flex',gap:'10px',flexWrap:'wrap'}}>
+          {Object.entries(dash.tasks_by_state).map(([st,n])=>
+            <div key={st} style={{background:'var(--bg3)',borderRadius:'8px',padding:'10px 16px',textAlign:'center',minWidth:'80px'}}>
+              <div style={{fontSize:'24px',fontWeight:700,color:stC[st]||'var(--tx2)'}}>{n}</div>
+              <div style={{fontSize:'10px',color:'var(--tx3)',marginTop:'2px'}}>{st}</div>
+            </div>
+          )}
+        </div>
+      </div>}
+      <div style={card}>
+        <div style={{...label,marginBottom:'8px'}}>Control Plane</div>
+        <div style={{fontFamily:'monospace',fontSize:'12px',color:'var(--tx2)'}}>
+          <div>Сервис: hyperion-control-plane-v2</div>
+          <div>Порт: 8006 → /api/hyperion/ (nginx proxy)</div>
+          <div>Статус: <span style={{color:sc}}>{health?.status||'...'}</span></div>
+        </div>
+      </div>
+    </div>;
+  }
+
+  /* ── SUBMIT ── */
+  function SubmitSection(){
+    const inp={background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:'8px',padding:'8px 12px',color:'var(--tx)',outline:'none',fontSize:'13px',width:'100%'};
+    const flds=[
+      {k:'dept',l:'Отдел (department_id)',t:'text',ph:'maxai-dev'},
+      {k:'market',l:'Рынок (market_id)',t:'text',ph:'RU'},
+      {k:'rev',l:'Expected Revenue ($)',t:'number',ph:'10'},
+      {k:'cost',l:'Estimated Cost ($)',t:'number',ph:'0.5'},
+      {k:'prob',l:'Success Probability (0-1)',t:'number',ph:'0.85'},
+      {k:'urgency',l:'Urgency Score (1-10)',t:'number',ph:'1'},
+    ];
+    return <div style={{display:'flex',flexDirection:'column',gap:'14px'}}>
+      <div style={card}>
+        <div style={{...label,marginBottom:'10px'}}>Описание задачи</div>
+        <textarea
+          value={form.desc}
+          onChange={e=>setForm(f=>({...f,desc:e.target.value}))}
+          placeholder="Опишите задачу для Hyperion Engine..."
+          rows={3}
+          style={{...inp,resize:'vertical',minHeight:'72px'}}
+        />
+      </div>
+      <div style={{...card,display:'grid',gridTemplateColumns:'1fr 1fr',gap:'12px'}}>
+        <div style={{...label,gridColumn:'1/-1',marginBottom:'0'}}>Advanced Options</div>
+        {flds.map(f=><div key={f.k}>
+          <div style={{...label,marginBottom:'4px'}}>{f.l}</div>
+          <input type={f.t} value={form[f.k]} placeholder={f.ph}
+            onChange={e=>setForm(v=>({...v,[f.k]:e.target.value}))}
+            style={inp}/>
+        </div>)}
+      </div>
+      <div style={{display:'flex',gap:'10px',alignItems:'center'}}>
+        <button onClick={doSubmit} disabled={submitting||!form.desc.trim()}
+          style={{background:submitting?'var(--bg3)':'var(--em)',border:'none',borderRadius:'8px',padding:'10px 28px',color:'#000',fontWeight:700,cursor:submitting?'not-allowed':'pointer',fontSize:'14px',opacity:!form.desc.trim()?0.4:1}}>
+          {submitting?'⏳ Отправка...':'▶ Run Task'}
+        </button>
+        <span style={{fontSize:'12px',color:'var(--tx3)'}}>EV = Rev×Prob − Cost = <b style={{color:'var(--am)'}}>${((form.rev*form.prob)-form.cost).toFixed(2)}</b></span>
+      </div>
+      {submitLog.length>0&&<div style={card}>
+        <div style={{...label,marginBottom:'10px'}}>Журнал сессии ({submitLog.length})</div>
+        {submitLog.map((l,i)=><div key={i} style={{display:'grid',gridTemplateColumns:'60px 70px 80px 1fr 60px',gap:'8px',padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:'11px',alignItems:'center'}}>
+          <span style={{color:'var(--tx3)'}}>{l.time}</span>
+          <span style={{color:'var(--em)',fontFamily:'monospace'}}>{l.id}</span>
+          <span style={{color:stC[l.state]||'var(--tx2)',fontWeight:600}}>{l.state}</span>
+          <span style={{color:'var(--tx)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{l.desc}</span>
+          <span style={{color:'var(--am)',textAlign:'right'}}>EV:{l.ev}</span>
+        </div>)}
+      </div>}
+    </div>;
+  }
+
+  /* ── TASKS ── */
+  function TasksSection(){
+    const [filter,setFilter]=React.useState('ALL');
+    const [taskDetail,setTaskDetail]=React.useState(null);
+    const [fetching,setFetching]=React.useState(false);
+
+    const states=['ALL','ROUTED','VALUATED','PROMOTED','FAILED','COMPLETED'];
+
+    async function loadTask(id){
+      setFetching(true);
+      try{
+        const r=await fetch(CP+'/tasks/'+id);
+        const d=await r.json();
+        setTaskDetail(d);
+      }catch(e){}
+      setFetching(false);
+    }
+
+    const allStates=dash?.tasks_by_state||{};
+    const totByState=Object.entries(allStates);
+
+    return <div style={{display:'flex',flexDirection:'column',gap:'14px'}}>
+      <div style={card}>
+        <div style={{...label,marginBottom:'10px'}}>Фильтр по состоянию</div>
+        <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
+          {states.map(s=>{
+            const n=s==='ALL'?dash?.total_tasks:allStates[s]||0;
+            return <button key={s} onClick={()=>setFilter(s)}
+              style={{padding:'5px 12px',borderRadius:'20px',border:`1px solid ${filter===s?stC[s]||'var(--em)':'var(--border)'}`,background:filter===s?'var(--bg3)':'transparent',color:filter===s?stC[s]||'var(--em)':'var(--tx3)',cursor:'pointer',fontSize:'12px',fontWeight:filter===s?700:400}}>
+              {s} {n!=null?<span>({n})</span>:null}
+            </button>;
+          })}
+        </div>
+      </div>
+      {totByState.length>0?<div style={card}>
+        {totByState.filter(([s])=>filter==='ALL'||s===filter).map(([st,n])=>
+          <div key={st} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 0',borderBottom:'1px solid var(--border)'}}>
+            <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
+              <div style={{width:'10px',height:'10px',borderRadius:'50%',background:stC[st]||'var(--tx3)'}}/>
+              <span style={{fontWeight:600,color:stC[st]||'var(--tx2)'}}>{st}</span>
+            </div>
+            <span style={{fontSize:'20px',fontWeight:700,color:stC[st]||'var(--tx2)'}}>{n}</span>
+          </div>
+        )}
+      </div>:<div style={{...card,color:'var(--tx3)',fontSize:'12px'}}>Нет данных. Отправьте первую задачу во вкладке «Отправить».</div>}
+      {submitLog.length>0&&<div style={card}>
+        <div style={{...label,marginBottom:'10px'}}>Поиск задачи по ID</div>
+        <div style={{display:'flex',gap:'8px'}}>
+          <select onChange={e=>e.target.value&&loadTask(e.target.value)}
+            style={{flex:1,background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:'8px',padding:'8px',color:'var(--tx)',fontSize:'12px'}}>
+            <option value=''>Выберите task_id...</option>
+            {submitLog.map(l=><option key={l.full_id} value={l.full_id}>{l.id} — {l.desc.slice(0,40)}</option>)}
+          </select>
+          {fetching&&<span style={{color:'var(--tx3)',fontSize:'12px',alignSelf:'center'}}>⏳</span>}
+        </div>
+        {taskDetail&&<pre style={{marginTop:'10px',background:'var(--bg3)',padding:'10px',borderRadius:'8px',fontSize:'11px',color:'var(--tx2)',overflow:'auto',maxHeight:'200px'}}>{JSON.stringify(taskDetail,null,2)}</pre>}
+      </div>}
+    </div>;
+  }
+
+  /* ── CAPABILITIES ── */
+  function CapsSection(){
+    return <div style={{display:'flex',flexDirection:'column',gap:'14px'}}>
+      <div style={card}>
+        <div style={{...label,marginBottom:'8px'}}>Registered Capabilities</div>
+        <div style={{fontSize:'32px',fontWeight:700,color:'var(--bl)'}}>{dash?.capabilities??0}</div>
+        <div style={{fontSize:'12px',color:'var(--tx3)',marginTop:'4px'}}>Устройства выполнения задач</div>
+      </div>
+      <div style={card}>
+        <div style={{...label,marginBottom:'8px'}}>Pattern Memory</div>
+        <div style={{fontSize:'32px',fontWeight:700,color:'var(--pu)'}}>{dash?.patterns_learned??0}</div>
+        <div style={{fontSize:'12px',color:'var(--tx3)',marginTop:'4px'}}>Накопленные паттерны поведения</div>
+      </div>
+      <div style={card}>
+        <div style={{...label,marginBottom:'8px'}}>Департаменты</div>
+        {['maxai-dev','maxai-trading','maxai-analytics','maxai-promo'].map(d=><div key={d} style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:'12px'}}>
+          <span style={{color:'var(--tx)'}}>{d}</span>
+          <span style={{color:'var(--tx3)'}}>dept_id</span>
+        </div>)}
+      </div>
+    </div>;
+  }
+
+  /* ── CONFIG ── */
+  function ConfigSection(){
+    return <div style={{display:'flex',flexDirection:'column',gap:'14px'}}>
+      <div style={card}>
+        <div style={{...label,marginBottom:'10px'}}>Системная информация</div>
+        {[
+          ['Сервис','hyperion-control-plane-v2'],
+          ['Порт Control Plane','8006'],
+          ['Nginx Proxy','/api/hyperion/ → :8006'],
+          ['PostgreSQL','hyperion_v12 @ localhost'],
+          ['RabbitMQ','amqp://guest@localhost'],
+          ['Exchange','hyperion.v12.core'],
+          ['Routing Key','task.capability.run'],
+          ['Worker','hyperion-data-plane-v2 service'],
+        ].map(([k,v])=><div key={k} style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:'12px'}}>
+          <span style={{color:'var(--tx3)',minWidth:'160px'}}>{k}</span>
+          <span style={{color:'var(--tx)',fontFamily:'monospace'}}>{v}</span>
+        </div>)}
+      </div>
+      <div style={card}>
+        <div style={{...label,marginBottom:'10px'}}>Services</div>
+        {[
+          'hyperion-control-plane-v2',
+          'hyperion-data-plane-v2',
+          'hyperion-engine',
+        ].map(s=><div key={s} style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:'12px',alignItems:'center'}}>
+          <span style={{color:'var(--tx)'}}>{s}</span>
+          <span style={{background:'rgba(16,185,129,0.15)',color:'var(--em)',padding:'2px 8px',borderRadius:'4px',fontSize:'11px'}}>active</span>
+        </div>)}
+      </div>
+    </div>;
+  }
+
+  const sections={overview:<OverviewSection/>,submit:<SubmitSection/>,tasks:<TasksSection/>,capabilities:<CapsSection/>,config:<ConfigSection/>};
+
+  return <div style={{display:'flex',flexDirection:'column',height:'100%',overflow:'hidden'}}>
+    {/* Top bar */}
+    <div style={{background:'var(--bg1)',borderBottom:'1px solid var(--border)',padding:'12px 20px',display:'flex',alignItems:'center',gap:'14px',flexShrink:0}}>
+      <span style={{fontSize:'22px'}}>&#x26a1;</span>
+      <div>
+        <div style={{fontSize:'16px',fontWeight:700,color:'var(--em)'}}>Hyperion Engine v12</div>
+        <div style={{fontSize:'11px',color:'var(--tx3)'}}>Economic Router · Autonomous AI Execution Platform</div>
+      </div>
+      <div style={{marginLeft:'auto',display:'flex',gap:'8px',alignItems:'center'}}>
+        <span style={{background:'var(--bg3)',padding:'3px 10px',borderRadius:'20px',fontSize:'12px',color:sc,border:`1px solid ${sc}`,fontWeight:600}}>
+          &#9679; {health?.status||'...'}
+        </span>
+        <button onClick={loadAll} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:'8px',padding:'4px 10px',color:'var(--tx2)',cursor:'pointer',fontSize:'12px'}}>&#8635; Refresh</button>
+      </div>
+    </div>
+
+    {/* Sub-nav */}
+    <div style={{background:'var(--bg2)',borderBottom:'1px solid var(--border)',padding:'0 20px',display:'flex',gap:'4px',flexShrink:0}}>
+      {navItems.map(n=><button key={n.id} onClick={()=>setSection(n.id)}
+        style={{padding:'10px 16px',background:'transparent',border:'none',borderBottom:`2px solid ${section===n.id?'var(--em)':'transparent'}`,color:section===n.id?'var(--em)':'var(--tx3)',cursor:'pointer',fontSize:'13px',fontWeight:section===n.id?600:400,display:'flex',alignItems:'center',gap:'6px',transition:'color 0.15s'}}>
+        <span>{n.icon}</span> {n.label}
+      </button>)}
+    </div>
+
+    {/* Content area */}
+    <div style={{flex:1,overflowY:'auto',padding:'16px 20px'}}>
+      {err&&<div style={{background:'rgba(239,68,68,0.08)',border:'1px solid var(--re)',borderRadius:'8px',padding:'10px 14px',color:'var(--re)',fontSize:'12px',marginBottom:'12px'}}>&#x26a0; {err}</div>}
+      {sections[section]}
+    </div>
+  </div>;
+}
+
+/* ── APP ── */
+function App(){
+  const [tab,setTab]=useState('home');
+  const [metrics,setMetrics]=useState({});
+  const [agents,setAgents]=useState([]);
+  const [agentsCount,setAgentsCount]=useState(108);
+  const {add}=useContext(ToastCtx);
+
+  const wsStatus=useWS(data=>{
+    if(data.type==='status'||data.cpu!==undefined){
+      setMetrics(d=>({...d,
+        cpu_pct:data.cpu??data.cpu_pct??d.cpu_pct,
+        ram_pct:data.ram??data.ram_pct??d.ram_pct,
+        ram_used_mb:data.ram_mb??d.ram_used_mb,
+        agents_working:data.agents_working??d.agents_working,
+      }));
+    }
+  });
+
+  const loadMetrics=useCallback(()=>{
+    api('/api/metrics').then(d=>setMetrics(d)).catch(()=>{});
+  },[]);
+
+  const loadAgents=useCallback(()=>{
+    api('/api/agents').then(d=>{
+      const arr=d.agents||d.data||[];
+      setAgents(arr);
+      setAgentsCount(d.agents_count||d.total||arr.length||108);
+    }).catch(()=>{});
+  },[]);
+
+  useEffect(()=>{
+    loadMetrics();loadAgents();
+    const t1=setInterval(loadMetrics,10000);
+    const t2=setInterval(loadAgents,30000);
+    return ()=>{clearInterval(t1);clearInterval(t2)};
+  },[]);
+
+  const [time,setTime]=useState(new Date());
+  useEffect(()=>{const t=setInterval(()=>setTime(new Date()),1000);return()=>clearInterval(t)},[]);
+
+  const tabs={
+    home:<HomeTab metrics={metrics} agents={agents} wsStat={wsStatus}/>,
+    chat:<ChatTab/>,
+    agents:<AgentsTab agents={agents} onRefresh={loadAgents}/>,
+    earnings:<EarningsTab/>,
+    projects:<ProjectsTab/>,
+    activity:<ActivityTab/>,
+    trading:<TradingTab/>,
+    analytics:<AnalyticsTab/>,
+    system:<SystemTab/>,
+    settings:<SettingsTab/>,
+    hyperion:<HyperionTab/>,
+  };
+
+  return <div className="layout">
+    <Hud wsStatus={wsStatus} metrics={metrics} agentsCount={agentsCount}/>
+    <Sidebar tab={tab} setTab={setTab}/>
+    <div className="content">
+      {tabs[tab]}
+    </div>
+  </div>;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <ToastProvider><App/></ToastProvider>
+);
+</script>
+</body>
+</html>

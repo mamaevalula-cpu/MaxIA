@@ -1,0 +1,5 @@
+# Requirements for hyperion_command_center
+fastapi
+uvicorn
+jinja2
+python-dotenv

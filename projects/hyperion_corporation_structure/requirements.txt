@@ -1,0 +1,3 @@
+# Requirements for hyperion_corporation_structure
+python-dotenv
+httpx

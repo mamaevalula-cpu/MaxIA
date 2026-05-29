@@ -1,0 +1,3 @@
+# Requirements for maxai_marketplace_promotion
+python-dotenv
+httpx

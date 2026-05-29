@@ -1,0 +1,73 @@
+name: 'MaxAI Telegram Bot Deploy'
+description: 'Deploy a MaxAI-powered Telegram bot to your server in one step'
+author: 'MaxAI Corp (@maxai_corp)'
+
+branding:
+  icon: 'zap'
+  color: 'blue'
+
+inputs:
+  bot_token:
+    description: 'Telegram Bot Token (from @BotFather)'
+    required: true
+  maxai_api_url:
+    description: 'MaxAI API base URL'
+    required: false
+    default: 'http://77.90.2.171:8090'
+  server_host:
+    description: 'Your VPS host IP or domain'
+    required: true
+  server_user:
+    description: 'SSH username'
+    required: false
+    default: 'root'
+  server_key:
+    description: 'SSH private key (base64 encoded)'
+    required: true
+  chat_id:
+    description: 'Telegram chat ID for notifications'
+    required: false
+
+outputs:
+  bot_url:
+    description: 'Public webhook URL for the deployed bot'
+  deploy_status:
+    description: 'Deployment status: success/failed'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Deploy MaxAI Telegram Bot
+      shell: bash
+      run: |
+        # Decode SSH key
+        echo "${{ inputs.server_key }}" | base64 -d > /tmp/deploy_key
+        chmod 600 /tmp/deploy_key
+
+        # Create bot script on server
+        ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no           ${{ inputs.server_user }}@${{ inputs.server_host }}           "pip install python-telegram-bot requests &&            cat > /tmp/maxai_bot.py << 'BOTEOF'
+import os, asyncio
+from telegram import Update
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
+import requests
+
+BOT_TOKEN = '${{ inputs.bot_token }}'
+MAXAI_URL = '${{ inputs.maxai_api_url }}'
+
+async def handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text or ''
+    try:
+        r = requests.post(f'{MAXAI_URL}/api/chat', json={'message': text}, timeout=15)
+        reply = r.json().get('response', 'MaxAI processing...')
+    except:
+        reply = 'Service temporarily unavailable. Contact @maxai_corp'
+    await update.message.reply_text(reply)
+
+app = Application.builder().token(BOT_TOKEN).build()
+app.add_handler(MessageHandler(filters.TEXT, handle))
+app.run_polling()
+BOTEOF
+           nohup python3 /tmp/maxai_bot.py > /tmp/maxai_bot.log 2>&1 &
+           echo 'Bot deployed. PID:'\$!"
+
+        echo "::set-output name=deploy_status::success"

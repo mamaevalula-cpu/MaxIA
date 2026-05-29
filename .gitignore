@@ -1,0 +1,35 @@
+# Large data
+backups/
+data/
+logs/
+vector_stores/
+agent_logs/
+__pycache__/
+*.pyc
+*.pyo
+*.db
+*.sqlite3
+
+# Secrets
+.env
+*.env
+secrets.py
+*_secret*
+
+# Runtime
+*.pid
+*.log
+nohup.out
+harvester_screenshots/
+
+# Node
+node_modules/
+# Backup files with secrets
+*.bak
+*.bak_*
+dashboard/routes.py.bak*
+
+# Docs that may contain keys
+IMPLEMENTATION_PLAN.md
+COMPLETION_REPORT.md
+PRODUCTION_GUIDE.md

@@ -1,0 +1,120 @@
+from __future__ import annotations
+
+import concurrent.futures
+import json
+import logging
+import re
+import threading
+import time
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from brain.llm_router import LLMProvider, LLMRequest, LLMResponse, LLMRouter
+from core.config import cfg
+from core.event_bus import EventBus
+from core.system_prompt import build_system_prompt
+from memory.memory_store import KnowledgeEntry, MemoryStore
+from memory.rag_engine import RAGEngine
+
+log = logging.getLogger("brain.orchestrator")
+
+@dataclass
+class OrchestratorRequest:
+    text: str
+    source: str = "gui"
+    session_id: str = ""
+    user_id: str = ""
+    require_verification: bool = False
+    metadata: Dict = field(default_factory=dict)
+    progress_callback: Optional[Callable[[str], None]] = None
+
+
+@dataclass
+class OrchestratorResponse:
+    text: str
+    intent: str = "chat"
+    agent_used: str = ""
+    verified: bool = False
+    sources: List[str] = field(default_factory=list)
+    task_id: Optional[int] = None
+
+
+# ── Специалисты для дебатов (используют лучшие модели под роль) ──────────────
+
+DEBATE_SPECIALISTS = {
+    "analyst": {
+        "persona": "Ты — эксперт-аналитик. Анализируй факты, выявляй закономерности, строй логические цепочки. Будь точен и конкретен.",
+        "provider": LLMProvider.GROQ,   # Fast free tier
+        "focus": "анализ и факты",
+    },
+    "coder": {
+        "persona": "Ты — senior Python-разработчик. Думай как опытный разработчик.",
+        "provider": LLMProvider.CLAUDE,  # High quality
+        "focus": "кодирование",
+    },
+}
+
+
+class Orchestrator:
+    def __init__(self, llm_router: LLMRouter, memory_store: MemoryStore, rage_engine: RAGEngine):
+        self.llm_router = llm_router
+        self.memory_store = memory_store
+        self.rage_engine = rage_engine
+        self.event_bus = EventBus()
+
+    def process_request(self, request: OrchestratorRequest) -> OrchestratorResponse:
+        try:
+            # Classify   — определить намерение (trading / code / analysis / chat / ...)
+            intent = self.classify_intent(request.text)
+
+            # RAG        — загрузить релевантный контекст из памяти
+            context = self.rage_engine.get_relevant_context(request.text)
+
+            # Route      — выбрать путь: агент (Coder/Trading/...) или DEBATE
+            if intent == "code":
+                agent = "coder"
+            elif intent == "analysis":
+                agent = "analyst"
+            else:
+                agent = "chat"
+
+            # DEBATE     — декомпозиция → параллельные специалисты → дебаты → синтез
+            if agent == "chat":
+                response = self.chat_debate(request.text, context)
+            else:
+                response = self.agent_debate(request.text, context, agent)
+
+            # Apply      — если в ответе есть код → применить через CoderAgent
+            if "code" in response.text:
+                self.apply_code(response.text)
+
+            # Learn      — сохранить удачные паттерны в MemoryStore
+            self.memory_store.save_successful_pattern(request.text, response.text)
+
+            # Notify     — вернуть ответ в GUI/Telegram
+            return OrchestratorResponse(response.text, intent=intent, agent_used=agent)
+        except Exception as e:
+            log.error(f"Error processing request: {e}")
+            return OrchestratorResponse("Ошибка обработки запроса.", intent="error")
+
+    def classify_intent(self, text: str) -> str:
+        # TO DO: implement intent classification
+        pass
+
+    def chat_debate(self, text: str, context: Dict) -> str:
+        # TO DO: implement chat debate
+        pass
+
+    def agent_debate(self, text: str, context: Dict, agent: str) -> str:
+        specialist = DEBATE_SPECIALISTS[agent]
+        persona = specialist["persona"]
+        provider = specialist["provider"]
+        focus = specialist["focus"]
+
+        request = LLMRequest(text, persona, provider, focus)
+        response = self.llm_router.send_request(request)
+        return response.text
+
+    def apply_code(self, code: str) -> None:
+        # TO DO: implement code application
+        pass

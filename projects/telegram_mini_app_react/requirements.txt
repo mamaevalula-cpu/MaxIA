@@ -1,0 +1,6 @@
+# Requirements for telegram_mini_app_react
+fastapi
+uvicorn
+jinja2
+python-dotenv
+python-telegram-bot

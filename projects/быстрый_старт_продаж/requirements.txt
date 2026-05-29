@@ -1,0 +1,4 @@
+# Requirements for быстрый_старт_продаж
+python-dotenv
+httpx
+python-telegram-bot

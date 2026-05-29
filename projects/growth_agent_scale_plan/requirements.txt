@@ -1,0 +1,3 @@
+# Requirements for growth_agent_scale_plan
+python-dotenv
+httpx

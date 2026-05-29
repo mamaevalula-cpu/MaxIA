@@ -1,0 +1,1887 @@
+# -*- coding: utf-8 -*-
+"""
+brain/orchestrator.py — Главный ИИ-оркестратор с мульти-агентными дебатами.
+
+Алгоритм обработки каждого запроса:
+  1. Classify   — определить намерение (trading / code / analysis / chat / ...)
+  2. RAG        — загрузить релевантный контекст из памяти
+  3. Route      — выбрать путь: агент (Coder/Trading/...) или DEBATE
+  4. DEBATE     — декомпозиция → параллельные специалисты → дебаты → синтез
+  5. Apply      — если в ответе есть код → применить через CoderAgent
+  6. Learn      — сохранить удачные паттерны в MemoryStore
+  7. Notify     — вернуть ответ в GUI/Telegram
+
+Принципы:
+  • DeepSeek R1 (reasoner) — основной провайдер для всех задач
+  • Если качество ответа < 0.4 → повтор с Claude
+  • Агенты обучаются: сохраняют успешные паттерны после каждого взаимодействия
+  • Все шаги видны пользователю в реальном времени через progress_callback
+"""
+
+from __future__ import annotations
+
+import concurrent.futures
+import json
+import logging
+import re
+import threading
+import time
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from brain.llm_router import LLMProvider, LLMRequest, LLMResponse, LLMRouter
+from core.config import cfg
+from core.event_bus import EventBus
+from core.system_prompt import build_system_prompt
+from memory.memory_store import KnowledgeEntry, MemoryStore
+from memory.rag_engine import RAGEngine
+
+log = logging.getLogger("brain.orchestrator")
+
+
+@dataclass
+class OrchestratorRequest:
+    text: str
+    source: str = "gui"
+    session_id: str = ""
+    user_id: str = ""
+    require_verification: bool = False
+    metadata: Dict = field(default_factory=dict)
+    progress_callback: Optional[Callable[[str], None]] = None
+
+
+@dataclass
+class OrchestratorResponse:
+    text: str
+    intent: str = "chat"
+    agent_used: str = ""
+    verified: bool = False
+    sources: List[str] = field(default_factory=list)
+    task_id: Optional[int] = None
+
+
+# ── Специалисты для дебатов (используют лучшие модели под роль) ──────────────
+
+DEBATE_SPECIALISTS = {
+    "analyst": {
+        "persona": "Ты — эксперт-аналитик. Анализируй факты, выявляй закономерности, строй логические цепочки. Будь точен и конкретен.",
+        "provider": LLMProvider.DEEPSEEK,   # R1 — сильный reasoning
+        "focus": "анализ и факты",
+    },
+    "coder": {
+        "persona": "Ты — senior Python-разработчик. Думай о реализации: архитектура, код, производительность, edge cases. Давай конкретные примеры кода.",
+        "provider": LLMProvider.DEEPSEEK,   # R1 SOTA для кода
+        "focus": "техническая реализация",
+    },
+    "critic": {
+        "persona": "Ты — технический критик. Находи слабые места, потенциальные ошибки, риски и пропущенные случаи. Предлагай улучшения.",
+        "provider": LLMProvider.CLAUDE,     # Claude — лучший критик
+        "focus": "критика и риски",
+    },
+    "researcher": {
+        "persona": "Ты — исследователь. Ищи актуальные данные, свежие факты, примеры из реальной практики. Ссылайся на конкретные источники.",
+        "provider": LLMProvider.GEMINI,     # Gemini 2.5 — большой контекст + поиск
+        "focus": "исследование и данные",
+    },
+    "strategist": {
+        "persona": "Ты — стратег и архитектор. Думай о долгосрочных последствиях, оптимальных решениях, обходных путях. Мыслишь системно.",
+        "provider": LLMProvider.OPENAI,     # o3/GPT-4o — сильный reasoning
+        "focus": "стратегия и архитектура",
+    },
+    "synthesizer": {
+        "persona": "Ты — опытный архитектор систем. Синтезируй разные точки зрения в единое целостное решение. Устраняй противоречия.",
+        "provider": LLMProvider.DEEPSEEK,   # R1 для финального синтеза
+        "focus": "синтез решений",
+    },
+}
+
+# ── Классификатор намерений ───────────────────────────────────────────────────
+
+# ВАЖНО: порядок имеет значение — более специфичные паттерны идут первыми,
+# чтобы не перекрываться более общими (напр. "image" до "analysis", "monitor" до "trading")
+INTENT_PATTERNS: Dict[str, re.Pattern] = {
+    # ── Новые специфичные агенты (в начале списка!) ──
+    "image": re.compile(
+        r"(проанализируй изображение|посмотри на картинку|что на фото|опиши фото|"
+        r"ocr|распознай текст с|прочитай с фото|"
+        r"analyze image|describe image|what's in the photo|text from image|"
+        r"сгенерируй изображение|нарисуй|создай картину|создай арт|"
+        r"generate image|draw a picture|create art|text to image)",
+        re.IGNORECASE
+    ),
+    "monitor": re.compile(
+        r"(следи за ценой|мониторинг цены|алерт на цену|уведоми когда цена|"
+        r"следи за сайтом|мониторинг сайта|"
+        r"watch price|price alert|monitor price|alert me when price|"
+        r"список мониторов|покажи мониторы|убери монитор|"
+        r"системный статус|нагрузка cpu|нагрузка ram|сколько памяти)",
+        re.IGNORECASE
+    ),
+    "news": re.compile(
+        r"(последние новости|что нового сегодня|дайджест новостей|тренды дня|"
+        r"новости крипто|новости биткоин|новости технологий|новости ии|"
+        r"последние новости о|рассказ.* новости|"
+        r"latest news|tech news|crypto news|ai news|news digest|"
+        r"headlines today|what's trending|что происходит в мире)",
+        re.IGNORECASE
+    ),
+    "run_code": re.compile(
+        r"(выполни\s+(?:этот\s+)?код|запусти\s+(?:этот\s+)?код|"
+        r"исполни\s+(?:этот\s+)?код|протестируй\s+(?:этот\s+)?код|"
+        r"run\s+(?:this\s+)?code|execute\s+(?:this\s+)?code|"
+        r"что выведет|что вернёт этот код|результат выполнения кода|"
+        r"запусти\s+скрипт|выполни\s+скрипт)",
+        re.IGNORECASE
+    ),
+    "search": re.compile(
+        r"(найди в интернете|поищи в интернете|загуглить|погуглить|"
+        r"поиск в сети|найти в сети|ищи в интернете|"
+        r"search online|find online|look it up|google it|"
+        r"wikipedia|wiki статья|arxiv|"
+        r"прочитай страницу|открой сайт|зайди на сайт)",
+        re.IGNORECASE
+    ),
+    "summarize": re.compile(
+        r"(суммаризируй|сделай краткое содержание|перескажи кратко|"
+        r"выдели главное|выжимка из|тезисы из|резюме из|"
+        r"summarize|make a summary|tldr|tl;dr|key points|brief me on|"
+        r"что главное в|основная мысль|сократи текст)",
+        re.IGNORECASE
+    ),
+    "self_training": re.compile(
+        r"(обучи себя|обучись|самообучение|улучши свои знания|прокачай себя|"
+        r"self.?train|auto.?learn|train yourself|improve yourself|"
+        r"анализ своих ответов|качество ответов|создай знания|generate knowledge|"
+        r"наведи порядок|очисти память|дубли в памяти|устаревш.*памяти|"
+        r"карта памяти|слои памяти|отчёт.*обучени|журнал.*обучени|"
+        r"что.*выучил|чему.*научил|memory.*layer|cleaner|cleanup.*memory|"
+        r"learning.?loop|pipeline.*отчёт|отчёт.*pipeline|конвейер.*обучени|"
+        r"откат.*знани|rollback.*знани|конфликт.*знани|conflict.*знани|"
+        r"deferred.*проверк|отложенн.*проверк|исход.*знани|outcome.*знани)",
+        re.IGNORECASE
+    ),
+    "key_manager": re.compile(
+        r"(проверь ключи|статус ключей|подключи ключ|добавь ключ|сохрани ключ|"
+        r"введи ключ|запиши ключ|api.?key|подключи провайдер|настрой провайдер|"
+        r"подключи все|подключи.*(groq|gemini|openai|claude|grok|deepseek|"
+        r"mistral|together|perplexity)|"
+        r"автоматически подключи|setup keys|check keys|key status|"
+        r"какие ключи|покажи ключи|мониторинг ключей|следи за ключами|"
+        r"нет ключа|добавь ключ|нет api|нет доступа к|открой страницу ключей)",
+        re.IGNORECASE
+    ),
+    # ── Фриланс / поиск работы ──
+    "freelance": re.compile(
+        r"(найди|поищи|search).*(работ|job|вакансий|фриланс|заказ)|"
+        r"(фриланс|freelance|upwork|freelancer\.com|fiverr|toptal|contra)|"
+        r"(proposal|заявк|оффер).*(написать|создать|сгенерируй|подать)|"
+        r"(оцени|estimate|сколько стоит|цена|бюджет).*(проект|задач|разработ|фич)|"
+        r"(заработ|earning|доход|income).*(фриланс|статистик|отчёт|сколько)|"
+        r"(портфолио|portfolio).*(добав|создай|показ)|"
+        r"(найди мне работу|подай заявку|напиши proposal|предложение клиенту)",
+        re.IGNORECASE
+    ),
+    # ── Платёжные системы ──
+    "payment": re.compile(
+        r"(stripe|paypal|payoneer|wise\.com|revolut\.com)|"
+        r"(интеграц|integration|подключи|подключить|настрой).*(платёж|payment|stripe|paypal|checkout)|"
+        r"(платёж|payment|оплата|checkout|invoice|счёт).*(создать|сгенерируй|выставить|setup)|"
+        r"(крипто|crypto|usdt|usdc|bitcoin|btc|ethereum|eth|bnb).*(оплат|payment|принять|accept)|"
+        r"(binance.?pay|coingate|nowpayments|cryptomus)|"
+        r"(webhook|вебхук).*(stripe|paypal|платёж|payment)|"
+        r"(подписка|subscription).*(billing|stripe|paypal|оплат)|"
+        r"(pci.?dss|3d.?secure|3ds|fraud.protect|chargeback)|"
+        r"(юkassa|tinkoff.?pay|сбер.?pay|liqpay|fondy|wayforpay)|"
+        r"(open.?banking|plaid|tink|nordigen|bank.?api)|"
+        r"(выставь счёт|create invoice|генерируй счёт|invoice.*клиент|invoice\s+\w)",
+        re.IGNORECASE
+    ),
+    # ── Браузер (web browsing) ──
+    "browser": re.compile(
+        r"(открой сайт|открой страниц|зайди на|browse|open url|http://|https://)|"
+        r"(найди в интернете|поищи в сети|погугли|search web|web search)|"
+        r"(цена.*крипт|крипт.*цена|курс.*btc|btc.*курс|price.*crypto)|"
+        r"(новости.*крипт|крипт.*новости|crypto news|tor browser|анонимн.*браузер)",
+        re.IGNORECASE
+    ),
+    # ── Математика и финансы (перед analysis — более специфичный) ──
+    "math": re.compile(
+        r"(реши уравнени|реши задач|найди корн|вычисли|посчитай|рассчитай|"
+        r"производная|дифференциал|интеграл|упрост|разложи|факториз|"
+        r"NPV|IRR|ROI|VaR|CVaR|шарп|сортино|коэффициент шарпа|"
+        r"критерий келли|kelly|блэк.?шоулз|black.?scholes|опцион.*цена|"
+        r"монте.?карло|monte.?carlo|симуляц|"
+        r"портфель.*(оптим|марковиц|frontier)|марковиц|efficient frontier|"
+        r"вероятность|теория вероятност|распределени.*(норм|пуассон|биномиальн)|"
+        r"байес|байесовск|доверительный интервал|confidence interval|"
+        r"математическое ожидание|expected value|дисперс|стандартное отклонен|"
+        r"логарифм|степень|корень|факториал|комбинаторик|перестановк|сочетани|"
+        r"сложные проценты|compound interest|CAGR|аннуитет|"
+        r"точка безубыточности|break.?even|маржа|рентабельность|"
+        r"максимальная просадка|max.?drawdown|"
+        r"solve equation|derivative|integral|simplify|evaluate|"
+        r"financial formula|portfolio optim|probability distribution|"
+        r"посчитай формул|математическ|финансов.*формул|рассчитай.*портфел)",
+        re.IGNORECASE
+    ),
+    # ── Оригинальные агенты ──
+    "project_create": re.compile(
+        r"(создай|сделай|запусти|начни|новый|новая|новое|start|create|make|build)\s+"
+        r".*(проект|приложени|систем|анализатор|дашборд|dashboard|"
+        r"project|app|application|system|analyzer|tool)|"
+        r"(создай|сделай|напиши)\s+(telegram[- ]бот|tg[- ]бот|новый бот|бот для)",
+        re.IGNORECASE
+    ),
+    "code_change": re.compile(
+        r"(измени|добавь|удали|перепиши|исправь|обнови|напиши|"
+        r"change|modify|add|remove|rewrite|fix|write|implement|update)\s+"
+        r".*(код|функци|класс|метод|файл|скрипт|стратег|агент|"
+        r"code|function|class|method|file|script|agent|strategy)|"
+        r"(создай|create)\s+.*(код|файл|функцию|класс|метод|"
+        r"code|file|function|class|method)|"
+        r"(доработай|улучши|добавь функцию|добавь возможность)\s+(себя|систему|агент|код)",
+        re.IGNORECASE
+    ),
+    "trading": re.compile(
+        r"(торговл|трейд|ордер|позици|баланс|прибыль|убыток|bybit|binance|"
+        r"trade|trading|order|position|balance|profit|loss|signal|"
+        r"торгует|сделк|войди|выйди|открой сделк|закрой сделк|купи|продай|"
+        r"как там бот|наш бот|торговый бот|бот торгу|"
+        r"войти в сделк|выйти из сделк|открыть позицию|закрыть позицию|"
+        r"stop.?loss|take.?profit|стоп.?лосс|тейк.?профит|"
+        r"buy|sell|long|short|pnl|p&l|депозит|биржа|монет|"
+        r"btc|eth|sol|xrp|bnb|usdt|крипто|crypto|курс валют|рынок крипт)",
+        re.IGNORECASE
+    ),
+    "analysis": re.compile(
+        r"(анализ|исследу|объясни|почему|как работает|сравни|оцени|"
+        r"analyze|research|explain|why|how does|compare|evaluate|assess)",
+        re.IGNORECASE
+    ),
+    "memory": re.compile(
+        r"(запомни|сохрани|добавь в память|что ты знаешь|покажи историю|"
+        r"remember|save|add to memory|what do you know|show history)",
+        re.IGNORECASE
+    ),
+    "rollback": re.compile(
+        r"(откат|отмени|восстанови|rollback|revert|undo|restore)",
+        re.IGNORECASE
+    ),
+    "status": re.compile(
+        r"(статус|состояние|как дела|что делает|что активно|"
+        r"status|state|what's happening|what is active)",
+        re.IGNORECASE
+    ),
+}
+
+
+class BrainOrchestrator:
+    _msg_dedup: dict = {}  # {hash: timestamp} — TTL-evicted (see _dedup_check)
+
+    """
+    Главный мозг — мульти-агентные дебаты + непрерывное обучение.
+    Singleton.
+    """
+
+    _instance: Optional["BrainOrchestrator"] = None
+    _lock = threading.Lock()
+
+    def __init__(self) -> None:
+        self._llm = LLMRouter.get()
+        self._memory = MemoryStore.get()
+        self._rag = RAGEngine.get()
+        self._bus = EventBus.get()
+        self._agents: Dict[str, Any] = {}
+        self._rlock = threading.RLock()
+        self._response_callbacks: List[Callable] = []
+        self._bus.subscribe("brain.task", self._on_task_event)
+
+        # ── Evolution components (lazy-loaded для быстрого старта) ────────────
+        self._context_optimizer  = None
+        self._reflection_engine  = None
+        self._planner            = None
+        self._metrics            = None
+        self._cot_engine         = None   # Chain-of-Thought
+        self._episodic_memory    = None   # Episodic memory cross-sessions
+        self._tool_registry      = None   # Unified tool registry
+        self._task_queue         = None   # Persistent task queue
+        self._init_evolution_components()
+
+        
+        # Load master prompt
+        try:
+            import pathlib
+            mp = pathlib.Path("/root/my_personal_ai/config/master_prompt.md")
+            if mp.exists():
+                self._master_prompt = mp.read_text(encoding="utf-8")
+                log.info("Loaded master prompt (%d chars)", len(self._master_prompt))
+            else:
+                self._master_prompt = ""
+        except Exception:
+            self._master_prompt = ""
+
+        # ── SFE + TokenQueue + Coordinator ────────────────────────────────────
+        try:
+            import sys as _sys
+            if "/root/my_personal_ai" not in _sys.path:
+                _sys.path.insert(0, "/root/my_personal_ai")
+            from core.self_funding_engine import SelfFundingEngine
+            self._sfe = SelfFundingEngine.get()
+            from core.token_queue import TokenQueueManager
+            self._token_queue = TokenQueueManager.get()
+            from core.agent_coordinator import AgentCoordinator
+            self._coordinator = AgentCoordinator.get()
+            # ── Wire cross-agent subscriptions ───────────────────────────────
+            def _on_trading_done(sender, etype, data):
+                """Monitor picks up every trading event for risk tracking."""
+                self._coordinator.update_shared(
+                    "last_trade_event", data, "trading"
+                )
+            def _on_email_done(sender, etype, data):
+                """Sales agent gets notified on every email check."""
+                self._coordinator.update_shared(
+                    "last_email_event", data, "email"
+                )
+            self._coordinator.subscribe("agent_trading_done", "monitor", _on_trading_done)
+            self._coordinator.subscribe("agent_email_done",   "sales",   _on_email_done)
+            log.info("SFE v2026.2 + TokenQueue + AgentCoordinator + subscriptions online")
+        except Exception as _sfe_e:
+            log.warning("SFE startup skipped: %s", _sfe_e)
+            self._sfe = self._token_queue = self._coordinator = None
+
+        log.info("BrainOrchestrator ready (debate + reflection + planning + CoT + episodic)")
+
+    def _init_evolution_components(self) -> None:
+        """Инициализировать продвинутые компоненты без блокировки старта."""
+        try:
+            from core.context_optimizer import ContextOptimizer
+            self._context_optimizer = ContextOptimizer.get()
+        except Exception as e:
+            log.warning("ContextOptimizer unavailable: %s", e)
+        try:
+            from brain.reflection_engine import ReflectionEngine
+            self._reflection_engine = ReflectionEngine.get()
+            self._reflection_engine.set_memory(self._memory)
+            # Подключаем LLM через адаптер
+            self._reflection_engine.set_llm_callback(self._llm_simple_call)
+        except Exception as e:
+            log.warning("ReflectionEngine unavailable: %s", e)
+        try:
+            from monitoring.metrics import MetricsCollector
+            self._metrics = MetricsCollector.get()
+        except Exception as e:
+            log.warning("Metrics unavailable: %s", e)
+
+        # ── NEXT-STAGE: CoT + EpisodicMemory + ToolRegistry + TaskQueue ──────
+        try:
+            from brain.chain_of_thought import ChainOfThoughtEngine
+            self._cot_engine = ChainOfThoughtEngine.get()
+            self._cot_engine.set_llm_callback(self._llm_simple_call)
+            log.info("ChainOfThoughtEngine connected")
+        except Exception as e:
+            log.warning("CoT unavailable: %s", e)
+
+        try:
+            from memory.episodic_memory import EpisodicMemory
+            self._episodic_memory = EpisodicMemory.get()
+            self._episodic_memory.set_llm_callback(self._llm_simple_call)
+            log.info("EpisodicMemory connected")
+        except Exception as e:
+            log.warning("EpisodicMemory unavailable: %s", e)
+
+        try:
+            from core.tool_registry import ToolRegistry
+            self._tool_registry = ToolRegistry.get()
+            log.info("ToolRegistry connected")
+        except Exception as e:
+            log.warning("ToolRegistry unavailable: %s", e)
+
+        try:
+            from core.task_queue import TaskQueue
+            self._task_queue = TaskQueue.get()
+            self._task_queue.set_brain_callback(self.process)
+            self._task_queue.start()
+            log.info("TaskQueue started")
+        except Exception as e:
+            log.warning("TaskQueue unavailable: %s", e)
+
+        # Auto-self-healing: restart dead threads every 60s
+        try:
+            self._start_self_healing_thread()
+            log.info("Auto-self-healing thread started")
+        except Exception as e:
+            log.warning("Self-healing thread failed to start: %s", e)
+
+
+
+    def _start_self_healing_thread(self) -> None:
+        """Background thread: checks required threads every 60s and restarts if dead."""
+
+        def _healing_loop():
+            import threading as _threading
+            import time as _time
+            while True:
+                try:
+                    _time.sleep(60)
+                    alive = {t.name for t in _threading.enumerate()}
+
+                    # Check key-health-monitor
+                    if "key-health-monitor" not in alive:
+                        log.warning("[self-heal] key-health-monitor thread missing — restarting")
+                        try:
+                            agent = self._agents.get("key_manager")
+                            if agent and hasattr(agent, "start_key_monitoring"):
+                                agent.start_key_monitoring()
+                                log.info("[self-heal] key-health-monitor restarted OK")
+                        except Exception as _e:
+                            log.error("[self-heal] key-health-monitor restart failed: %s", _e)
+
+                    # Check self-training thread
+                    _train_alive = any("self-train" in n or "training" in n for n in alive)
+                    if not _train_alive:
+                        log.debug("[self-heal] self-training thread not running (may be normal)")
+
+                except Exception as _e:
+                    log.debug("[self-heal] healing loop error: %s", _e)
+
+        _t = threading.Thread(
+            target=_healing_loop, daemon=True, name="self-healing-monitor"
+        )
+        _t.start()
+
+    def _llm_simple_call(self, prompt: str, system: str = "",
+                          max_tokens: int = 1500) -> str:
+        """Простой LLM вызов для внутреннего использования (reflection, CoT, etc.)."""
+        req = LLMRequest(
+            messages=[{"role": "user", "content": prompt}],
+            system=system,
+            max_tokens=max_tokens,
+            task_type="analysis",
+        )
+        resp = self._llm.ask(req)
+        return resp.content if resp.success else ""
+
+    @classmethod
+    def get(cls) -> "BrainOrchestrator":
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls()
+        return cls._instance
+
+    def register_agent(self, name: str, agent: Any) -> None:
+        with self._rlock:
+            self._agents[name] = agent
+        log.info("Agent registered: %s", name)
+
+    def add_response_callback(self, cb: Callable) -> None:
+        self._response_callbacks.append(cb)
+
+    # ── Главный обработчик ────────────────────────────────────────────────────
+
+    def process(self, request: OrchestratorRequest) -> OrchestratorResponse:
+        log.info("[%s] Process: %r", request.source, request.text[:80])
+
+        def _step(msg: str) -> None:
+            if request.progress_callback:
+                try:
+                    request.progress_callback(msg)
+                except Exception:
+                    pass
+
+        t_process_start = time.time()
+
+        # 0. Degraded-mode check — если все LLM недоступны, дать понятный ответ
+        try:
+            report = self._llm.status_report()
+            available = [k for k, v in report.items() if v.get("available")]
+            if not available:
+                log.warning("DEGRADED MODE: no LLM providers available")
+                _step("⚠️ Деградированный режим — нет доступных LLM провайдеров")
+                return OrchestratorResponse(
+                    text=(
+                        "⚠️ Система работает в деградированном режиме.\n\n"
+                        "Все LLM провайдеры временно недоступны.\n"
+                        "• Проверь наличие API ключей в .env\n"
+                        "• Проверь интернет-соединение\n"
+                        "• Попробуй повторить запрос через несколько секунд\n\n"
+                        "Система продолжает работать: память, Telegram и торговый бот активны."
+                    ),
+                    intent="degraded",
+                    agent_used="orchestrator",
+                )
+        except Exception:
+            pass  # если status_report не работает — продолжаем как обычно
+
+        # 1. Classify
+        _step("🔍 Классифицирую запрос...")
+        intent = self._classify_intent(request.text)
+        log.debug("Intent: %s", intent)
+
+        # 1.5. Planner detection — сложные многошаговые задачи
+        # source="planner" = вызов из подзадачи — рекурсию запрещаем
+        # intent="chat" = простой диалог — плановщик не нужен
+        _skip_planner = (
+            request.source in ("planner", "internal", "system")
+            or intent == "chat"
+        )
+        if not _skip_planner and intent not in ("status", "memory", "rollback", "image", "monitor",
+                                              "sales", "arbitrage", "system_switch", "browser",
+                                              "trading", "email", "news", "search", "analysis",
+                                              "summarize", "math", "run_code", "monitor"):
+            try:
+                from agents.planner_agent import PlannerAgent
+                if PlannerAgent.should_plan(request.text):
+                    planner = self._agents.get("planner")
+                    if planner and hasattr(planner, "create_plan"):
+                        _step("📋 Сложная задача — создаю план выполнения...")
+                        plan = planner.create_plan(request.text)
+                        if len(plan.subtasks) > 1:
+                            _step(f"🔄 Выполняю план: {len(plan.subtasks)} шагов...")
+                            result = planner.execute_plan(plan, progress_callback=_step)
+                            response = OrchestratorResponse(
+                                text=result, intent="plan", agent_used="planner"
+                            )
+                            self._learn_from_interaction(request.text, response.text, "plan")
+                            self._notify(response, request.source)
+                            if self._metrics:
+                                self._metrics.record_plan("completed")
+                            return response
+            except Exception as e:
+                log.debug("Planner check failed (non-critical): %s", e)
+
+        # 2. RAG context (с оптимизацией) + эпизодическая память
+        # Skip RAG for fast-path intents — they don't need knowledge context
+        _fast_intent = intent in ("trading", "email", "chat", "status", "monitor",
+                                  "news", "arbitrage", "system_switch", "image")
+        if _fast_intent:
+            raw_rag = ""
+        else:
+            _step("📚 Загружаю контекст из памяти...")
+            raw_rag = self._rag.get_context(
+                request.text, max_tokens=2000,
+                session_id=request.session_id
+            )
+        # Оптимизировать RAG контекст
+        if self._context_optimizer and raw_rag:
+            rag_context = self._context_optimizer.optimize_rag_context(
+                raw_rag, request.text, max_tokens=1500
+            )
+        else:
+            rag_context = raw_rag
+
+        # 2.5. Эпизодическая память — добавить контекст из прошлых сессий
+        if self._episodic_memory and not _fast_intent:
+            try:
+                # Контекст текущей сессии
+                session_ctx = self._episodic_memory.get_session_context(
+                    request.session_id, max_episodes=8
+                ) if request.session_id else ""
+                # Кросс-сессионный контекст (из других сессий)
+                cross_ctx = self._episodic_memory.get_cross_session_context(
+                    request.text, current_session_id=request.session_id, limit=3
+                )
+                episodic_ctx = "\n\n".join(filter(None, [session_ctx, cross_ctx]))
+                if episodic_ctx:
+                    rag_context = (episodic_ctx + "\n\n" + rag_context).strip()
+            except Exception as e:
+                log.debug("Episodic context failed (non-critical): %s", e)
+
+        # 2.6. Chain-of-Thought reasoning (для сложных запросов)
+        cot_result = None
+        _skip_cot = intent in ("trading", "email", "chat", "status", "news", "search",
+                              "summarize", "monitor", "image", "run_code", "sales",
+                              "arbitrage", "system_switch", "memory")
+        if self._cot_engine and not _skip_cot:
+            try:
+                from brain.chain_of_thought import ChainOfThoughtEngine
+                if ChainOfThoughtEngine.should_use_cot(request.text, intent):
+                    _step("🧠 Запускаю цепочку рассуждений...")
+                    cot_result = self._cot_engine.reason(
+                        query=request.text,
+                        context=rag_context[:600],
+                        intent=intent,
+                    )
+                    if cot_result.succeeded:
+                        _step(f"✅ CoT уверенность: {cot_result.confidence:.0%}")
+                        # Добавить reasoning trace в контекст
+                        rag_context = (
+                            rag_context + "\n\n[Предварительный анализ]:\n"
+                            + cot_result.format_trace()[:500]
+                        ).strip()
+                    else:
+                        cot_result = None  # недостаточно уверен
+            except Exception as e:
+                log.debug("CoT failed (non-critical): %s", e)
+                cot_result = None
+
+        # 3. Route
+        _step(f"🎯 Намерение: [{intent}] — выбираю исполнителя...")
+        try:
+            response = self._route(request, intent, rag_context, _step)
+        except Exception as e:
+            log.error("Routing failed: %s", e, exc_info=True)
+            self._learn_from_error(request.text, str(e), intent)
+            if self._metrics:
+                self._metrics.record_error("routing")
+            response = OrchestratorResponse(
+                text=f"⚠️ Ошибка обработки: {e}", intent=intent
+            )
+
+        # 3.5. Если CoT дал высокую уверенность и ответ агента слишком короткий — использовать CoT
+        if (cot_result and cot_result.succeeded
+                and cot_result.confidence >= 0.80
+                and len(response.text) < 100
+                and not response.text.startswith("⚠️")):
+            log.debug("CoT answer preferred over short agent response")
+            response.text = cot_result.final_answer
+            response.agent_used = f"{response.agent_used}+cot"
+
+        # 4. Self-Reflection — проверить и улучшить ответ
+        # Skip for simple chat/status/sales — they're already fast and reflection adds 10+ seconds
+        _skip_reflection = intent in ("chat", "status", "sales", "memory", "arbitrage", "system_switch", "trading", "analysis", "email", "news", "search", "summarize", "monitor", "image", "run_code")
+        if self._reflection_engine and not response.text.startswith("⚠️") and not _skip_reflection:
+            try:
+                reflect_result = self._reflection_engine.reflect_and_improve(
+                    original_query=request.text,
+                    original_response=response.text,
+                    intent=intent,
+                    context=rag_context,
+                )
+                if reflect_result.improved:
+                    _step(f"✨ Ответ улучшен через рефлексию (score: {reflect_result.quality_score:.2f})")
+                    response.text = reflect_result.final_response
+                if self._metrics:
+                    self._metrics.record_reflection(reflect_result.improved)
+            except Exception as e:
+                log.debug("Reflection failed (non-critical): %s", e)
+
+        # 5. Verify for critical tasks
+        if request.require_verification or intent in ("code_change",):
+            _step("✅ Верифицирую результат...")
+            response = self._verify(response, request)
+
+        # 6. Learn from interaction
+        self._learn_from_interaction(request.text, response.text, intent)
+
+        # 7. Update working memory + episodic memory
+        if request.session_id:
+            if self._context_optimizer:
+                try:
+                    self._context_optimizer.update_working_memory(
+                        session_id=request.session_id,
+                        result=response.text[:200],
+                        error=response.text[:100] if response.text.startswith("⚠️") else "",
+                    )
+                except Exception:
+                    pass
+            if self._episodic_memory:
+                try:
+                    # Определить outcome по наличию ошибок
+                    outcome = "negative" if response.text.startswith("⚠️") else "positive"
+                    importance = 0.7 if intent in ("code_change", "trading", "analysis") else 0.5
+                    self._episodic_memory.record_episode(
+                        session_id=request.session_id,
+                        query=request.text,
+                        response=response.text[:500],
+                        intent=intent,
+                        tags=[intent, response.agent_used or ""],
+                        importance=importance,
+                        outcome=outcome,
+                    )
+                    # Консолидировать сессию если нужно
+                    self._episodic_memory.consolidate_session(request.session_id)
+                except Exception as e:
+                    log.debug("Episodic record failed (non-critical): %s", e)
+
+        # 8. Metrics
+        if self._metrics:
+            try:
+                self._metrics.agent_event(
+                    agent_name=response.agent_used or "orchestrator",
+                    success=not response.text.startswith("⚠️"),
+                    latency_ms=(time.time() - t_process_start) * 1000,
+                )
+            except Exception:
+                pass
+
+        # 9. Notify
+        # Track response latency
+        _elapsed_ms = int((time.time() - t_process_start) * 1000)
+        response.latency_ms = _elapsed_ms
+        log.info("[%s] Done: intent=%s agent=%s latency=%dms",
+                 request.source, intent, response.agent_used, _elapsed_ms)
+        # Store latency in DB for analytics
+        try:
+            self._rag.log_llm_call(intent, _elapsed_ms) if hasattr(self._rag, 'log_llm_call') else None
+        except Exception:
+            pass
+        # ── Coordinator: broadcast to agent family ────────────────────────────
+        try:
+            if getattr(self, "_coordinator", None):
+                self._coordinator.broadcast(
+                    event_type=f"agent_{intent}_done",
+                    sender="chief_orchestrator",
+                    data={
+                        "intent":      intent,
+                        "agent_used":  response.agent_used,
+                        "latency_ms":  _elapsed_ms,
+                        "source":      request.source,
+                        "text_len":    len(response.text),
+                        "ts":          __import__("time").time(),
+                    },
+                )
+                # Update shared state for market/risk events
+                if intent == "trading":
+                    self._coordinator.update_shared("last_trade_ts", __import__("time").time(), "trading")
+                elif intent == "email":
+                    self._coordinator.update_shared("last_email_check", __import__("time").time(), "email")
+        except Exception:
+            pass
+        self._notify(response, request.source)
+        return response
+
+    def process_async(self, request: OrchestratorRequest) -> None:
+        t = threading.Thread(target=self.process, args=(request,), daemon=True)
+        t.start()
+
+    # ── Маршрутизация ─────────────────────────────────────────────────────────
+
+    def _route(self, request: OrchestratorRequest, intent: str,
+               rag_context: str, _step: Callable) -> OrchestratorResponse:
+
+        # ── Системные команды ──────────────────────────────────────────────────
+        if intent == "status":
+            _step("📊 Собираю статус системы...")
+            return self._handle_status()
+
+        if intent == "memory":
+            _step("💾 Работаю с памятью...")
+            return self._handle_memory_command(request.text)
+
+        if intent == "rollback":
+            agent = self._agents.get("coder")
+            if agent and hasattr(agent, "rollback"):
+                _step("⏪ Запускаю откат через CoderAgent...")
+                result = agent.rollback(request.text)
+                return OrchestratorResponse(text=result, intent=intent, agent_used="coder")
+
+        # ── Торговля ──────────────────────────────────────────────────────────
+        if intent == "trading":
+            # ── SECURITY GATE: block direct order commands (2026-05-17) ─────────
+            import re as _re_gate
+            _ORDER_PATTERN = _re_gate.compile(
+                r"(купи|buy|long|продай|sell|short|открой long|открой short)"
+                r"[\s]+([\d.]+)\s*([A-Z]{2,10}USDT?)",
+                _re_gate.IGNORECASE
+            )
+            if _ORDER_PATTERN.search(request.text):
+                log.warning("[SECURITY GATE] Blocked direct order command: %r", request.text[:80])
+                import time as _tg, json as _jg, uuid as _ug, os as _og
+                _PENDING = "/root/my_personal_ai/data/pending_approvals.jsonl"
+                _LOG     = "/root/my_personal_ai/logs/trade_attempts.log"
+                _og.makedirs(_og.path.dirname(_PENDING), exist_ok=True)
+                _nonce = _ug.uuid4().hex[:8]
+                _entry = _jg.dumps({
+                    "nonce": _nonce, "source": "orchestrator_gate",
+                    "text": request.text[:200], "ts": _tg.time(),
+                    "status": "blocked", "reason": "direct_order_no_whitelist"
+                })
+                try:
+                    with open(_PENDING, "a") as _pf:
+                        _pf.write(_entry + "\n")
+                    with open(_LOG, "a") as _lf:
+                        _lf.write(f"[GATE BLOCKED] {_tg.time()} | {request.text[:200]}\n")
+                except Exception:
+                    pass
+                return OrchestratorResponse(
+                    text=(
+                        "BLOCKED: Direct trading orders are disabled.\n"
+                        "The ALLOWED_SYMBOLS whitelist is empty — no live orders can be placed.\n"
+                        f"Nonce: {_nonce}\n"
+                        "To re-enable: add symbols to ALLOWED_SYMBOLS in trading_agent.py "
+                        "after verifying account safety."
+                    ),
+                    intent=intent, agent_used="security_gate"
+                )
+            # ── END SECURITY GATE ─────────────────────────────────────────────
+            agent = self._agents.get("trading")
+            if agent:
+                _step("📈 Запускаю TradingAgent — подключаюсь к Bybit...")
+                result = agent.process(request.text, source=request.source)
+                return OrchestratorResponse(text=result, intent=intent, agent_used="trading")
+            # Fallback: direct bridge status
+            from core.trading_bridge import get_trading_status_text
+            return OrchestratorResponse(text=get_trading_status_text(), intent=intent, agent_used="trading_bridge")
+
+        # ── Email ─────────────────────────────────────────────────────────────
+        if intent == "email":
+            agent = self._agents.get("email")
+            if agent:
+                _step("📬 Проверяю почту...")
+                result = agent.process(request.text, source=request.source)
+                return OrchestratorResponse(text=result, intent=intent, agent_used="email")
+            return OrchestratorResponse(
+                text="📬 Email-агент не подключён. Настройте EMAIL_ADDRESS и EMAIL_PASSWORD в .env",
+                intent=intent, agent_used="orchestrator"
+            )
+
+        # ── Создание проектов ─────────────────────────────────────────────────
+        if intent == "project_create":
+            agent = self._agents.get("project_creator")
+            if agent:
+                _step("📁 Запускаю ProjectCreatorAgent — создаю структуру...")
+                result = agent.process(request.text, source=request.source)
+                return OrchestratorResponse(text=result, intent=intent, agent_used="project_creator")
+
+        # ── Изменение кода ────────────────────────────────────────────────────
+        if intent == "code_change":
+            agent = self._agents.get("coder")
+            if agent:
+                _step("🖊️ Запускаю CoderAgent через дебаты...")
+                return self._debate_then_code(request, intent, rag_context, _step, agent)
+
+        # ── Анализ → AnalyzerAgent + дебаты обогащение ────────────────────────
+        if intent == "analysis":
+            analyzer = self._agents.get("analyzer")
+            if analyzer:
+                _step("🔬 Запускаю AnalyzerAgent (многоперспективный анализ)...")
+                result = analyzer.process(request.text, source=request.source)
+                # Обогащаем ответ через дебаты если запрос сложный
+                if len(request.text.split()) > 10:
+                    _step("⚔️ Обогащаю через мульти-агентные дебаты...")
+                    debate_result = self._debate(request, intent, rag_context, _step)
+                    # Если дебатный ответ значительно лучше — используем его
+                    if len(debate_result.text) > len(result) * 1.3:
+                        return debate_result
+                return OrchestratorResponse(text=result, intent=intent, agent_used="analyzer")
+
+        # ── Веб-поиск ─────────────────────────────────────────────────────────
+        # Browser agent (Tor anonymous browsing)
+        if intent == "browser":
+            agent = self._agents.get("browser")
+            if agent:
+                _step("Browser agent...")
+                result = agent.process(request.text, source=request.source)
+                return OrchestratorResponse(text=result, intent=intent, agent_used="browser")
+
+        if intent == "search":
+            agent = self._agents.get("search")
+            if agent:
+                _step("🔍 Запускаю SearchAgent — ищу в интернете...")
+                result = agent.process(request.text, source=request.source)
+                return OrchestratorResponse(text=result, intent=intent, agent_used="search")
+
+        # ── Новости ───────────────────────────────────────────────────────────
+        if intent == "news":
+            agent = self._agents.get("news")
+            if agent:
+                _step("📰 Запускаю NewsAgent — собираю дайджест...")
+                result = agent.process(request.text, source=request.source)
+                return OrchestratorResponse(text=result, intent=intent, agent_used="news")
+
+        # ── Выполнение кода ───────────────────────────────────────────────────
+        if intent == "run_code":
+            agent = self._agents.get("code_runner")
+            if agent:
+                _step("⚙️ Запускаю CodeRunnerAgent — выполняю код...")
+                result = agent.process(request.text, source=request.source)
+                return OrchestratorResponse(text=result, intent=intent, agent_used="code_runner")
+
+        # ── Суммаризация ──────────────────────────────────────────────────────
+        if intent == "summarize":
+            agent = self._agents.get("summarizer")
+            if agent:
+                _step("📄 Запускаю SummarizerAgent — суммаризирую...")
+                result = agent.process(request.text, source=request.source)
+                return OrchestratorResponse(text=result, intent=intent, agent_used="summarizer")
+
+        # ── Изображения ───────────────────────────────────────────────────────
+        if intent == "image":
+            agent = self._agents.get("image")
+            if agent:
+                _step("🖼 Запускаю ImageAgent — анализирую/генерирую...")
+                result = agent.process(request.text, source=request.source)
+                return OrchestratorResponse(text=result, intent=intent, agent_used="image")
+
+        # ── Мониторинг ────────────────────────────────────────────────────────
+        if intent == "monitor":
+            agent = self._agents.get("monitor")
+            if agent:
+                _step("📊 Запускаю MonitorAgent...")
+                result = agent.process(request.text, source=request.source)
+                return OrchestratorResponse(text=result, intent=intent, agent_used="monitor")
+
+        # ── Самообучение ──────────────────────────────────────────────────────
+        if intent == "self_training":
+            agent = self._agents.get("self_training")
+            if agent:
+                _step("🧠 Запускаю SelfTrainingAgent — анализирую и обучаюсь...")
+                result = agent.process(request.text, source=request.source)
+                return OrchestratorResponse(text=result, intent=intent, agent_used="self_training")
+
+        # ── Менеджер API-ключей ───────────────────────────────────────────────
+        if intent == "key_manager":
+            agent = self._agents.get("key_manager")
+            if agent:
+                _step("🔑 Запускаю KeyManagerAgent — управляю API-ключами...")
+                result = agent.process(request.text, source=request.source)
+                return OrchestratorResponse(text=result, intent=intent, agent_used="key_manager")
+
+        # ── Математика и финансы ──────────────────────────────────────────────
+        if intent == "math":
+            agent = self._agents.get("math")
+            if agent:
+                _step("🧮 Запускаю MathAgent — точные вычисления + объяснение...")
+                result = agent.process(request.text, source=request.source)
+                return OrchestratorResponse(text=result, intent=intent, agent_used="math")
+
+        # ── Фриланс / поиск работы ────────────────────────────────────────────
+        if intent == "freelance":
+            agent = self._agents.get("freelance")
+            if agent:
+                _step("💼 Запускаю FreelanceAgent — ищу работу, генерирую proposal...")
+                result = agent.process(request.text, source=request.source)
+                return OrchestratorResponse(text=result, intent=intent, agent_used="freelance")
+
+        # ── Платёжные системы ─────────────────────────────────────────────────
+        if intent == "payment":
+            agent = self._agents.get("payment")
+            if agent:
+                _step("💳 Запускаю PaymentAgent — платёжные системы и интеграции...")
+                result = agent.process(request.text, source=request.source)
+                return OrchestratorResponse(text=result, intent=intent, agent_used="payment")
+
+        # ── Sales Agent ─────────────────────────────────────────────────────
+        if intent == 'sales':
+            try:
+                import sys as _s; _s.path.insert(0, '/root/autonomous-ai-business')
+                from aib_loader import get_sales_agent as _gsa
+                import hashlib as _hh
+                _sess = str(getattr(request, 'session_id', None) or getattr(request, 'user_id', None) or 'anon')
+                _lid  = _hh.md5(_sess.encode()).hexdigest()[:10]
+                _sa   = _gsa()
+                _rv   = _sa(lead_id=_lid, message=request.text,
+                            channel=getattr(request, 'source', None) or 'chat')
+                _resp_text = _rv.get('response', '') if isinstance(_rv, dict) else str(_rv)
+                # Wire SFE: if invoice was generated, record 3% to compute
+                try:
+                    _inv_amt = float(_rv.get('invoice_amount', 0) if isinstance(_rv, dict) else 0)
+                    if _inv_amt > 0 and hasattr(self, '_sfe') and self._sfe:
+                        self._sfe.process_revenue('sale_closed', _inv_amt,
+                            {'lead_id': _lid, 'stage': _rv.get('stage','?')})
+                except Exception:
+                    pass
+                return OrchestratorResponse(text=_resp_text, intent=intent, agent_used='sales_agent')
+            except Exception as _ex:
+                log.warning('[Route] Sales: %s', _ex)
+                # fall through to chat
+
+
+        # ── Arbitrage Status ─────────────────────────────────────────────────
+        if intent == 'arbitrage':
+            try:
+                import sys as _s; _s.path.insert(0, '/root/autonomous-ai-business')
+                from aib_loader import get_arb_engine as _gae
+                _st = _gae()().get_status()
+                _cb = 'ACTIVE' if _st['circuit_breaker'] else 'OFF'
+                _pnl = _st['daily_pnl_usd']
+                _dd = _st['daily_drawdown_pct']
+                _tr = _st['trades_today']
+                _text = f'Arbitrage Engine | CB: {_cb} | PnL: ${_pnl:.4f} | DD: {_dd:.2f}% | Trades: {_tr}'
+                return OrchestratorResponse(text=_text, intent=intent, agent_used='arbitrage_engine')
+            except Exception as _ex:
+                log.warning('[Route] Arb: %s', _ex)
+
+        # ── System switch ─────────────────────────────────────────────────────
+        if intent == 'system_switch':
+            _ags = list(self._agents.keys()) if hasattr(self, '_agents') else []
+            _txt = 'Available agents: ' + ', '.join(sorted(_ags))
+            return OrchestratorResponse(text=_txt, intent=intent, agent_used='orchestrator')
+
+        # ── Быстрый путь для коротких chat-запросов (без дебатов) ─────────────
+        if intent == "chat" and len(request.text.split()) <= 12:
+            _step("💬 Прямой ответ (быстрый режим)...")
+            return self._llm_chat(request.text, rag_context, intent, _step)
+
+        # ── Gate: skip debate for short messages or simple task types ─────────
+        _msg_len = len(request.text)
+        _simple_intents = {"chat", "fast", "classify"}
+        if _msg_len < 200 and intent in _simple_intents:
+            return self._llm_chat(request.text, rag_context, intent, _step)
+        if _msg_len < 200 and intent not in ("code_change", "analysis", "research"):
+            # Short message, non-complex intent → skip expensive debate
+            return self._llm_chat(request.text, rag_context, intent, _step)
+
+        # ── Всё остальное — мульти-агентные дебаты ────────────────────────────
+        return self._debate(request, intent, rag_context, _step)
+
+    # ── Мульти-агентные дебаты ────────────────────────────────────────────────
+
+    def _debate(self, request: OrchestratorRequest, intent: str,
+                rag_context: str, _step: Callable) -> OrchestratorResponse:
+        """
+        Мульти-агентная стратегия дебатов:
+        1. Декомпозиция вопроса на под-темы
+        2. Параллельные специалисты изучают каждую тему
+        3. Дебатный раунд — критика и улучшение
+        4. Финальный синтез
+        """
+        text = request.text
+        t_start = time.time()
+
+        # ── Шаг 1: Декомпозиция ───────────────────────────────────────────────
+        _step("🧩 Декомпозиция вопроса на под-темы...")
+        sub_topics = self._decompose_question(text, intent)
+        _step(f"📋 Выделено {len(sub_topics)} под-тем: {', '.join(sub_topics[:3])}")
+        log.debug("Sub-topics: %s", sub_topics)
+
+        # ── Шаг 2: Параллельные специалисты ──────────────────────────────────
+        _step(f"🔬 Запускаю {min(len(sub_topics), 3)} специалистов параллельно...")
+        system_base = self._build_system_prompt(rag_context, task_type=self._intent_to_task(intent))
+        perspectives = self._parallel_research(text, sub_topics, system_base, _step)
+
+        if not perspectives:
+            # Fallback — одиночный запрос
+            _step("⚠️ Fallback к одиночному запросу...")
+            return self._llm_chat(text, rag_context, intent, _step)
+
+        # ── Шаг 3: Дебатный раунд ────────────────────────────────────────────
+        if len(perspectives) >= 2:
+            _step("⚔️ Дебаты: специалисты обсуждают и критикуют ответы...")
+            perspectives = self._debate_round(text, perspectives, _step)
+
+        # ── Шаг 4: Синтез ────────────────────────────────────────────────────
+        _step("🔗 Синтезирую финальный ответ из всех перспектив...")
+        # Для сложных/важных задач используем ensemble при синтезе
+        use_ensemble = (intent in ("analysis", "code_change") and len(text.split()) > 15)
+        final_text = self._synthesize(text, perspectives, intent, rag_context, _step,
+                                      use_ensemble=use_ensemble)
+
+        # ── Проверка качества + retry ─────────────────────────────────────────
+        quality = self._llm.score_quality(final_text, text)
+        _step(f"📊 Качество ответа: {quality:.0%}")
+        if quality < 0.4:
+            _step("🔄 Качество низкое — повтор запроса через Claude...")
+            retry_resp = self._llm.ask(LLMRequest(
+                messages=[{"role": "user", "content": text}],
+                system=system_base,
+                task_type=self._intent_to_task(intent),
+                max_tokens=3000,
+                preferred_provider=LLMProvider.CLAUDE,
+            ))
+            if retry_resp.success and self._llm.score_quality(retry_resp.content, text) > quality:
+                final_text = retry_resp.content
+                _step("✅ Claude дал лучший ответ — использую его")
+
+        elapsed = time.time() - t_start
+        _step(f"✍️ Готово за {elapsed:.1f}с | {len(perspectives)} специалистов")
+
+        return OrchestratorResponse(
+            text=final_text,
+            intent=intent,
+            agent_used="debate",
+            sources=[p.get("provider", "?") for p in perspectives],
+        )
+
+    def _decompose_question(self, text: str, intent: str) -> List[str]:
+        """Разбить вопрос на 2-4 под-темы через быстрый LLM-вызов."""
+        # Для коротких/простых запросов — не декомпозировать
+        if len(text.split()) < 8:
+            return [text]
+
+        prompt = (
+            f"Разбей следующий вопрос/задачу на 2-4 ключевые под-темы для параллельного исследования.\n"
+            f"Каждая под-тема — это отдельный аспект, который нужно исследовать независимо.\n\n"
+            f"ЗАПРОС: {text}\n"
+            f"НАМЕРЕНИЕ: {intent}\n\n"
+            f"Верни JSON массив строк: [\"под-тема 1\", \"под-тема 2\", ...]\n"
+            f"Максимум 4 под-темы. Только JSON."
+        )
+        try:
+            resp = self._llm.ask_fast(prompt, task_type="classify")
+            match = re.search(r'\[.*?\]', resp, re.DOTALL)
+            if match:
+                topics = json.loads(match.group())
+                if isinstance(topics, list) and topics:
+                    return [str(t)[:200] for t in topics[:4]]
+        except Exception as e:
+            log.debug("Decompose failed: %s", e)
+
+        # Fallback — одна тема
+        return [text]
+
+    def _parallel_research(self, original_text: str, sub_topics: List[str],
+                           system_base: str, _step: Callable) -> List[Dict]:
+        """
+        Параллельный запуск специалистов — каждый исследует под-тему.
+        Возвращает список результатов: [{"topic", "perspective", "content", "provider"}]
+        """
+        specialist_list = list(DEBATE_SPECIALISTS.items())
+        # Берём столько специалистов, сколько под-тем (макс 3)
+        n = min(len(sub_topics), 3)
+        assignments = list(zip(sub_topics[:n], specialist_list[:n]))
+
+        requests_map: Dict[int, Tuple[str, str]] = {}
+        llm_requests: List[LLMRequest] = []
+
+        for i, (topic, (spec_name, spec_info)) in enumerate(assignments):
+            prompt = (
+                f"ОРИГИНАЛЬНЫЙ ВОПРОС: {original_text}\n\n"
+                f"ТВОЯ ЗАДАЧА: Исследуй следующий аспект этого вопроса:\n"
+                f"«{topic}»\n\n"
+                f"Фокус: {spec_info['focus']}\n"
+                f"Дай конкретный, детальный ответ по этому аспекту. "
+                f"Используй факты, примеры, код если нужно."
+            )
+            req = LLMRequest(
+                messages=[{"role": "user", "content": prompt}],
+                system=spec_info["persona"] + "\n\n" + system_base[:1000],
+                task_type="analysis",
+                max_tokens=1500,
+                preferred_provider=spec_info["provider"],
+            )
+            llm_requests.append(req)
+            requests_map[i] = (topic, spec_name)
+
+        # Параллельные вызовы
+        responses = self._llm.ask_parallel(llm_requests)
+
+        results = []
+        for i, resp in enumerate(responses):
+            topic, spec_name = requests_map[i]
+            if resp and resp.success:
+                _step(f"  ✅ {spec_name}: «{topic[:40]}» — готово")
+                results.append({
+                    "topic": topic,
+                    "perspective": spec_name,
+                    "content": resp.content,
+                    "provider": resp.provider.value if resp else "?",
+                })
+            else:
+                _step(f"  ⚠️ {spec_name}: пропуск (ошибка)")
+                log.debug("Specialist %s failed: %s", spec_name, resp.error if resp else "None")
+
+        return results
+
+    def _debate_round(self, original_text: str,
+                      perspectives: List[Dict],
+                      _step: Callable) -> List[Dict]:
+        """
+        Дебатный раунд: показываем каждому специалисту ответы остальных,
+        просим улучшить своё мнение с учётом критики.
+        """
+        if len(perspectives) < 2:
+            return perspectives
+
+        # Собираем все перспективы в один контекст
+        debate_context = "\n\n".join([
+            f"=== СПЕЦИАЛИСТ: {p['perspective'].upper()} (тема: {p['topic']}) ===\n{p['content'][:800]}"
+            for p in perspectives
+        ])
+
+        improved = []
+        # Улучшаем только первые 2 (оптимизация — не гонять всех через дебаты)
+        for i, persp in enumerate(perspectives[:2]):
+            prompt = (
+                f"ОРИГИНАЛЬНЫЙ ВОПРОС: {original_text}\n\n"
+                f"МНЕНИЯ ДРУГИХ СПЕЦИАЛИСТОВ:\n{debate_context}\n\n"
+                f"ТВОЙ ПРЕДЫДУЩИЙ ОТВЕТ (роль: {persp['perspective']}):\n{persp['content'][:600]}\n\n"
+                f"С учётом мнений других специалистов:\n"
+                f"1. Выдели пункты, с которыми ты согласен\n"
+                f"2. Укажи, что было упущено или неверно\n"
+                f"3. Дай улучшенный ответ по теме: «{persp['topic']}»\n"
+                f"Формат: краткий финальный ответ без мета-комментариев."
+            )
+            spec_info = DEBATE_SPECIALISTS.get(persp["perspective"], DEBATE_SPECIALISTS["analyst"])
+            req = LLMRequest(
+                messages=[{"role": "user", "content": prompt}],
+                system=spec_info["persona"],
+                task_type="analysis",
+                max_tokens=1000,
+                preferred_provider=spec_info.get("provider", LLMProvider.DEEPSEEK),
+            )
+            resp = self._llm.ask(req)
+            if resp.success:
+                improved.append({**persp, "content": resp.content})
+            else:
+                improved.append(persp)
+
+        # Остальные перспективы добавляем без изменений
+        improved.extend(perspectives[2:])
+        return improved
+
+    def _synthesize(self, original_text: str, perspectives: List[Dict],
+                    intent: str, rag_context: str, _step: Callable,
+                    use_ensemble: bool = False) -> str:
+        """Финальный синтез всех перспектив в один ответ."""
+        perspectives_text = "\n\n".join([
+            f"### {p['perspective'].upper()} — «{p['topic']}»\n{p['content'][:1000]}"
+            for p in perspectives
+        ])
+
+        task_type = self._intent_to_task(intent)
+        system = self._build_system_prompt(rag_context, task_type=task_type)
+
+        prompt = (
+            f"ОРИГИНАЛЬНЫЙ ВОПРОС ПОЛЬЗОВАТЕЛЯ:\n{original_text}\n\n"
+            f"РЕЗУЛЬТАТЫ РАБОТЫ СПЕЦИАЛИСТОВ:\n{perspectives_text}\n\n"
+            f"Твоя задача — синтезировать всё в ЕДИНЫЙ, СТРУКТУРИРОВАННЫЙ ОТВЕТ:\n"
+            f"• Устрани противоречия между мнениями специалистов\n"
+            f"• Выдели наиболее важные и практичные выводы\n"
+            f"• Дай конкретные действия / код / рекомендации\n"
+            f"• Используй заголовки и списки для структуры\n"
+            f"• Если нужен код — дай полный рабочий код\n"
+            f"Отвечай напрямую на вопрос пользователя, не упоминай процесс дебатов."
+        )
+
+        req = LLMRequest(
+            messages=[{"role": "user", "content": prompt}],
+            system=system,
+            task_type=task_type,
+            max_tokens=3000,
+            # Для ensemble задач — запросить высокое качество
+            require_quality=use_ensemble,
+            preferred_provider=LLMProvider.DEEPSEEK,
+        )
+        resp = self._llm.ask(req)
+        if resp.success:
+            _step(f"  ✅ Синтез через {resp.provider.value}/{resp.model}")
+            return resp.content
+
+        # Fallback — просто объединяем перспективы
+        parts = [f"**{p['perspective']}**: {p['content'][:300]}..." for p in perspectives]
+        return "\n\n".join(parts)
+
+    def _debate_then_code(self, request: OrchestratorRequest, intent: str,
+                          rag_context: str, _step: Callable,
+                          coder_agent: Any) -> OrchestratorResponse:
+        """
+        Для code_change: сначала дебаты для выработки плана изменений,
+        потом CoderAgent применяет изменения в файлах.
+        """
+        text = request.text
+
+        # Шаг 1: Дебаты — выработать план
+        _step("💡 Дебаты специалистов: вырабатываем план изменений...")
+        plan_topics = [
+            f"Как технически реализовать: {text}",
+            f"Какие файлы нужно изменить и почему",
+        ]
+        system_base = self._build_system_prompt(rag_context, task_type="code")
+        perspectives = self._parallel_research(text, plan_topics, system_base, _step)
+
+        if perspectives:
+            _step("⚔️ Дебаты по плану реализации...")
+            perspectives = self._debate_round(text, perspectives, _step)
+            plan_text = self._synthesize(text, perspectives, intent, rag_context, _step)
+        else:
+            plan_text = text
+
+        # Шаг 2: CoderAgent применяет изменения
+        _step("🖊️ CoderAgent применяет изменения в файлах...")
+        # Передаём CoderAgent обогащённый контекст
+        enriched_task = f"{text}\n\n[ПЛАН ОТ ДЕБАТОВ]:\n{plan_text[:800]}"
+        result = coder_agent.process(enriched_task, source=request.source)
+
+        # Шаг 3: Показываем результат + план
+        full_response = result
+        if plan_text and "✅" in result:
+            full_response = (
+                f"{result}\n\n"
+                f"---\n📋 **Детали решения (из дебатов):**\n"
+                f"{plan_text[:1000]}{'...' if len(plan_text) > 1000 else ''}"
+            )
+
+        return OrchestratorResponse(
+            text=full_response, intent=intent, agent_used="debate+coder"
+        )
+
+    # ── Применение кода из ответа LLM ────────────────────────────────────────
+
+    def _try_apply_code_from_response(self, response_text: str,
+                                      request: OrchestratorRequest,
+                                      _step: Callable) -> str:
+        """
+        Если в ответе LLM есть код с указанием файла — применить через CoderAgent.
+        Паттерн: # Файл: path/to/file.py или # File: ...
+        """
+        coder = self._agents.get("coder")
+        if not coder:
+            return response_text
+
+        # Ищем блоки вида: ```python\n# Файл: agents/foo.py\n...```
+        file_blocks = re.finditer(
+            r'```python\s*\n#\s*(?:Файл|File):\s*(\S+\.py)\s*\n(.*?)```',
+            response_text, re.DOTALL | re.IGNORECASE
+        )
+        applied = []
+        for match in file_blocks:
+            rel_path = match.group(1).strip()
+            code = match.group(2).strip()
+            if not code or len(code) < 20:
+                continue
+            try:
+                _step(f"🔧 Применяю код в {rel_path}...")
+                task = f"Запиши следующий код в файл {rel_path}:\n```python\n{code}\n```"
+                result = coder.process(task, source=request.source)
+                if "✅" in result:
+                    applied.append(rel_path)
+                    _step(f"  ✅ Применено: {rel_path}")
+                else:
+                    _step(f"  ⚠️ Ошибка: {rel_path}")
+            except Exception as e:
+                log.debug("Auto-apply code failed for %s: %s", rel_path, e)
+
+        if applied:
+            response_text += f"\n\n✅ **Автоматически применено в {len(applied)} файл(ах):** {', '.join(f'`{p}`' for p in applied)}"
+
+        return response_text
+
+    # ── Обычный LLM-чат (fallback) ────────────────────────────────────────────
+
+    def _llm_chat(self, text: str, context: str, intent: str,
+                  _step: Callable) -> OrchestratorResponse:
+        """Fallback — одиночный запрос без дебатов."""
+        task_type = self._intent_to_task(intent)
+        system = self._build_system_prompt(context, task_type=task_type)
+
+        _step("📖 Загружаю историю диалога...")
+        raw_history = self._rag.get_recent_history(limit=6)
+        history = [
+            {**m, "content": m["content"][:800] + ("…" if len(m["content"]) > 800 else "")}
+            for m in raw_history
+        ]
+
+        # Short conversational messages → Groq fast path
+        _word_count = len(text.split())
+        _effective_task = "chat" if _word_count <= 15 else task_type
+        _max_tok = 800 if _word_count <= 15 else 2500
+        req = LLMRequest(
+            messages=history + [{"role": "user", "content": text}],
+            system=system,
+            task_type=_effective_task,
+            max_tokens=_max_tok,
+            temperature=0.7,
+        )
+
+        _step(f"💬 Отправляю запрос [{task_type.upper()}]...")
+        resp = self._llm.ask(req)
+        if not resp.success:
+            return OrchestratorResponse(
+                text=f"⚠️ AI недоступен: {resp.error}", intent=intent
+            )
+
+        _step(f"✍️ Ответ от {resp.provider.value}/{resp.model}")
+        return OrchestratorResponse(
+            text=resp.content, intent=intent,
+            agent_used=f"llm:{resp.provider.value}/{resp.model}",
+            sources=[resp.provider.value]
+        )
+
+    # ── Вспомогательные методы ────────────────────────────────────────────────
+
+    def _intent_to_task(self, intent: str) -> str:
+        return {
+            "code_change":    "code",
+            "project_create": "code",
+            "run_code":       "code",
+            "analysis":       "analysis",
+            "search":         "analysis",
+            "summarize":      "analysis",
+            "news":           "analysis",
+            "trading":        "trading",
+            "math":           "math",
+            "freelance":      "freelance",
+            "payment":        "payment",
+        }.get(intent, "chat")
+
+    def _build_system_prompt(self, rag_context: str = "",
+                             task_type: str = "chat") -> str:
+        try:
+            projects = self._memory.get_projects()
+        except Exception:
+            projects = []
+        agent_statuses = {}
+        for name, agent in self._agents.items():
+            try:
+                agent_statuses[name] = agent.get_status() if hasattr(agent, "get_status") else "idle"
+            except Exception:
+                agent_statuses[name] = "unknown"
+        base = build_system_prompt(
+            task_type=task_type,
+            rag_context=rag_context,
+            projects=projects,
+            agent_statuses=agent_statuses,
+        )
+        # Inject master prompt as primary identity if loaded
+        if getattr(self, "_master_prompt", ""):
+            from core.system_prompt import TASK_PROMPTS
+            addon = TASK_PROMPTS.get(task_type, TASK_PROMPTS.get("chat", ""))
+            extra_parts = []
+            if rag_context:
+                extra_parts.append("Relevant context:" + chr(10) + rag_context[:1500])
+            if projects:
+                extra_parts.append("Active projects: " + ", ".join(str(p) for p in projects[:5]))
+            if agent_statuses:
+                active = [k for k, v in agent_statuses.items() if v not in ("idle", "unknown", "")]
+                if active:
+                    extra_parts.append("Active agents: " + ", ".join(active[:8]))
+            prompt = self._master_prompt + chr(10) + chr(10) + addon
+            if extra_parts:
+                prompt += chr(10) + chr(10) + "Additional context:" + chr(10) + chr(10).join(extra_parts)
+            return prompt
+        return base
+
+    def _classify_intent(self, text: str) -> str:
+        """
+        Классифицирует намерение запроса.
+        Порядок: специфичные паттерны → LLM fallback для неоднозначных → chat.
+        """
+        text_lower = text.lower().strip()
+
+        # 0.0 Pure greeting shortcut — must return chat before any pattern matching
+        _greeting_kw = ("привет", "здравствуй", "добрый день", "добрый вечер",
+                        "доброе утро", "хай", "хэй", "hello", "hi ", "hey ",
+                        "как дела", "как ты", "как у тебя", "all good?")
+        if (any(text_lower.startswith(kw) or text_lower == kw for kw in _greeting_kw)
+                and len(text_lower.split()) <= 6):
+            return "chat"
+
+        # 0. Enhanced keyword routing (fast, before regex patterns)
+        # --- Browser/crypto prices (must come before short-query "chat" fallback) ---
+        _browser_price_kw = (
+            "цена btc", "цена eth", "цена sol", "цена bnb", "цена xrp",
+            "btc цена", "eth цена", "btc price", "eth price",
+            "курс btc", "курс eth", "bitcoin цена", "ethereum цена",
+            "стоимость btc", "стоимость eth",
+        )
+        if any(kw in text_lower for kw in _browser_price_kw):
+            return "browser"
+        _crypto_tokens = ("btc", "eth", "bitcoin", "ethereum", "solana", "dogecoin", "bnb", "xrp")
+        _price_words = ("цена", "price", "курс", "стоимость", "сколько стоит")
+        if any(t in text_lower for t in _crypto_tokens) and any(p in text_lower for p in _price_words):
+            return "browser"
+
+        # ── Fast status/help shortcuts ────────────────────────────────────────
+        _help_kw = ("что ты умеешь", "что умеешь", "твои возможности", "можешь делать",
+                    "помоги разобраться", "как ты работаешь", "расскажи о себе",
+                    "what can you do", "help me", "возможности системы")
+        if any(kw in text_lower for kw in _help_kw):
+            return "status"
+
+        # ── Email direct routing ────────────────────────────────────────────────
+        _email_kw = ("проверь почту", "проверь email", "почта", "входящие письма",
+                     "новые письма", "check email", "check mail", "inbox",
+                     "прочитай письм", "покажи письм", "найди письм")
+        if any(kw in text_lower for kw in _email_kw):
+            return "email"
+
+        # ── Trading direct routing (balance/status) ─────────────────────────────
+        _trading_status_kw = ("покажи баланс", "баланс bybit", "bybit баланс",
+                               "статус торговли", "мои позиции", "открытые позиции",
+                               "портфель bybit", "торговый бот")
+        if any(kw in text_lower for kw in _trading_status_kw):
+            return "trading"
+
+        _trading_kw = ("торгуй", "сделка", "торг", "торги", "торговля",
+                       "открой позицию", "купи монету", "продай монету")
+        if any(kw in text_lower for kw in _trading_kw):
+            return "trading"
+
+        _code_kw = ("напиши код", "написать код", "программируй", "напиши программу",
+                    "напиши функцию", "напиши класс", "исправь ошибку", "исправь ошибки",
+                    "fix ошибку", "fix the bug", "исправь баг", "debug")
+        if any(kw in text_lower for kw in _code_kw):
+            return "code_change"
+
+        _analysis_kw = ("анализ", "проверь", "диагностика", "проанализируй",
+                        "сделай анализ", "выполни диагностику")
+        if any(kw in text_lower for kw in _analysis_kw):
+            return "analysis"
+
+        # ── Sales / Arbitrage / System-switch ─ PRIORITY (before regex) ──────────
+        _tl = text_lower
+        _sales_kw = [
+            "продаж", "воронк", "лид",
+            "выставите счет", "выставь счет", "счет на ",
+            "счет выставить", "invoice", "оплатить", "оплата",
+            "купить подписку", "подписку", "купить план",
+            "sales", "crm", "lead", "конверс", "закрыть сделку",
+        ]
+        if any(kw in _tl for kw in _sales_kw):
+            return "sales"
+
+        _arb_kw = [
+            "арбитраж", "arbitrage", "orderbook", "ордербук",
+            "triangular arb", "spatial arb", "funding rate арб",
+            "межбиржев", "треугольный арбитраж",
+        ]
+        if any(kw in _tl for kw in _arb_kw):
+            return "arbitrage"
+
+        _switch_kw = [
+            "переключи", "переключись", "switch to",
+            "перейди на агент", "включи агент", "выключи агент",
+            "смени агента",
+        ]
+        if any(kw in _tl for kw in _switch_kw):
+            return "system_switch"
+
+        # 1. Regex patterns (быстро, без LLM)
+        for intent, pattern in INTENT_PATTERNS.items():
+            if pattern.search(text):
+                return intent
+
+        # 2. Эвристики для коротких запросов (< 6 слов) — скорее всего chat
+        words = text_lower.split()
+        if len(words) <= 5:
+            return "chat"
+
+        # 3. Ключевые слова для analysis — вопросы типа "объясни/что такое/почему"
+        _analysis_hints = re.compile(
+            r"(объясни|что такое|в чём разница|почему|как работает|"
+            r"расскажи про|опиши|сравни|плюсы и минусы|pros and cons|"
+            r"explain|what is|how does|difference between|pros.*cons)",
+            re.IGNORECASE
+        )
+        if _analysis_hints.search(text) and len(words) > 6:
+            return "analysis"
+
+        # 4. Detect project creation by broader patterns
+        _project_hints = re.compile(
+            r"(напиши скрипт|создай бота|сделай сервис|напиши сервер|"
+            r"write a bot|create a service|make a script)",
+            re.IGNORECASE
+        )
+        if _project_hints.search(text):
+            return "project_create"
+
+        # 5. LLM-классификация для длинных неоднозначных запросов (> 20 слов)
+        if len(words) > 20 and self._llm is not None:
+            try:
+                intents_list = (
+                    "chat, analysis, code_change, project_create, search, "
+                    "trading, math, news, summarize, run_code"
+                )
+                prompt = (
+                    f"Classify this request into ONE intent from: [{intents_list}].\n"
+                    f"Request: {text[:300]}\n"
+                    f"Reply with ONLY the intent word, nothing else."
+                )
+                from brain.llm_router import LLMRequest, LLMProvider
+                req = LLMRequest(
+                    messages=[{"role": "user", "content": prompt}],
+                    task_type="classify",
+                    provider_hint=LLMProvider.GROQ,
+                    max_tokens=10,
+                )
+                resp = self._llm.ask(req)
+                classified = resp.text.strip().lower().split()[0] if resp and resp.text else ""
+                valid = {
+                    "chat", "analysis", "code_change", "project_create",
+                    "search", "trading", "math", "news", "summarize", "run_code"
+                }
+                if classified in valid:
+                    log.debug("LLM intent classification: %r → %s", text[:40], classified)
+                    return classified
+            except Exception as _ce:
+                log.debug("LLM intent fallback failed: %s", _ce)
+
+
+
+
+        return "chat"
+
+    # ── Непрерывное обучение ──────────────────────────────────────────────────
+
+    def _learn_from_interaction(self, question: str, answer: str, intent: str) -> None:
+        """
+        Сохранить полезные паттерны из взаимодействия в MemoryStore.
+        Охватывает ВСЕ интенты — система учится на каждом взаимодействии.
+        """
+        try:
+            # Всегда сохраняем диалог в RAG
+            self._rag.learn_from_interaction(question, answer, source="orchestrator")
+
+            short_q = question[:60]
+            is_error = answer.startswith("⚠️") or "Ошибка" in answer[:50]
+
+            # ── Ошибки → category=error (высокий приоритет для обучения) ─────────
+            if is_error and len(answer) > 20:
+                title = f"Ошибка [{intent}]: {short_q}"
+                if not self._memory.knowledge_exists(title[:40], category="error"):
+                    self._memory.add_knowledge(KnowledgeEntry(
+                        category="error",
+                        title=title,
+                        content=f"Запрос: {question}\nИнтент: {intent}\nОшибка: {answer[:600]}",
+                        tags=["error", intent, "auto-learn"],
+                        importance=0.85,
+                        source="orchestrator",
+                    ))
+                return  # ошибку запомнили, дальше не нужно
+
+            # ── Код / создание проектов → category=solution ──────────────────────
+            if intent in ("code_change", "project_create") and len(answer) > 100:
+                title = f"Решение: {short_q}"
+                if not self._memory.knowledge_exists(title[:40], category="solution"):
+                    self._memory.add_knowledge(KnowledgeEntry(
+                        category="solution",
+                        title=title,
+                        content=f"Запрос: {question}\n\nРешение:\n{answer[:1200]}",
+                        tags=["auto-learn", intent, "code"],
+                        importance=0.65,
+                        source="auto-debate",
+                    ))
+
+            # ── Математика / финансы → category=math ────────────────────────────
+            elif intent == "math" and len(answer) > 80:
+                title = f"Расчёт: {short_q}"
+                if not self._memory.knowledge_exists(title[:40], category="math"):
+                    self._memory.add_knowledge(KnowledgeEntry(
+                        category="math",
+                        title=title,
+                        content=f"Вопрос: {question}\n\nРезультат:\n{answer[:800]}",
+                        tags=["auto-learn", "math", "calculation"],
+                        importance=0.7,
+                        source="math_agent",
+                    ))
+
+            # ── Анализ → category=analysis ───────────────────────────────────────
+            elif intent == "analysis" and len(answer) > 200:
+                title = f"Анализ: {short_q}"
+                if not self._memory.knowledge_exists(title[:40], category="analysis"):
+                    self._memory.add_knowledge(KnowledgeEntry(
+                        category="analysis",
+                        title=title,
+                        content=f"Запрос: {question}\n\nАнализ:\n{answer[:1000]}",
+                        tags=["auto-learn", "analysis"],
+                        importance=0.6,
+                        source="analyzer",
+                    ))
+
+            # ── Торговля → category=trading ──────────────────────────────────────
+            elif intent == "trading" and len(answer) > 100:
+                title = f"Торговля: {short_q}"
+                if not self._memory.knowledge_exists(title[:40], category="trading"):
+                    self._memory.add_knowledge(KnowledgeEntry(
+                        category="trading",
+                        title=title,
+                        content=f"Запрос: {question}\n\nОтвет: {answer[:800]}",
+                        tags=["auto-learn", "trading"],
+                        importance=0.75,
+                        source="trading_agent",
+                    ))
+
+            # ── Поиск / новости → category=research ─────────────────────────────
+            elif intent in ("search", "news") and len(answer) > 150:
+                title = f"Исследование: {short_q}"
+                if not self._memory.knowledge_exists(title[:40], category="research"):
+                    self._memory.add_knowledge(KnowledgeEntry(
+                        category="research",
+                        title=title,
+                        content=f"Запрос: {question}\n\nДанные:\n{answer[:600]}",
+                        tags=["auto-learn", intent, "research"],
+                        importance=0.5,
+                        source=intent,
+                    ))
+
+        except Exception as e:
+            log.debug("Learn failed: %s", e)
+
+    def _learn_from_error(self, question: str, error: str, intent: str) -> None:
+        """Сохранить ошибку маршрутизации для анализа SelfTrainingAgent."""
+        try:
+            title = f"Routing error [{intent}]: {question[:40]}"
+            if not self._memory.knowledge_exists(title[:40], category="error"):
+                self._memory.add_knowledge(KnowledgeEntry(
+                    category="error",
+                    title=title,
+                    content=f"Запрос: {question}\nИнтент: {intent}\nОшибка: {error[:400]}",
+                    tags=["routing-error", intent],
+                    importance=0.9,
+                    source="orchestrator",
+                ))
+        except Exception:
+            pass
+
+    # ── Статус системы ────────────────────────────────────────────────────────
+
+    def _handle_status(self) -> OrchestratorResponse:
+        llm_status = self._llm.status_report()
+        mem_stats = self._memory.stats()
+        agent_names = list(self._agents.keys())
+        available_llm = [k for k, v in llm_status.items() if v["available"]]
+        no_key_llm = [k for k, v in llm_status.items()
+                      if not v["available"] and not v["tokens_exhausted"]]
+        exhausted_llm = [k for k, v in llm_status.items() if v["tokens_exhausted"]]
+
+        text = (
+            f"📊 **Статус системы my_personal_ai**\n\n"
+            f"🤖 Агентов: {len(agent_names)} — {', '.join(agent_names) or '—'}\n\n"
+            f"🧠 **LLM Провайдеры (10 штук):**\n"
+            f"   ✅ Активных: {len(available_llm)} — {', '.join(available_llm) or 'нет'}\n"
+        )
+        if exhausted_llm:
+            text += f"   ⚠️ Лимит: {', '.join(exhausted_llm)}\n"
+        if no_key_llm:
+            text += f"   ❌ Нет ключа: {', '.join(no_key_llm)}\n"
+        text += (
+            f"   🎯 Основной: DeepSeek R1 (deepseek-reasoner)\n"
+            f"   🎯 Стратегия: Дебаты → Ensemble → Синтез\n\n"
+            f"   Специалисты дебатов: analyst(DeepSeek), coder(DeepSeek), "
+            f"critic(Claude), researcher(Gemini), strategist(OpenAI)\n\n"
+            f"💾 Память:\n"
+            f"   Сообщений: {mem_stats.get('messages', 0)}\n"
+            f"   Знаний: {mem_stats.get('knowledge', 0)}\n"
+            f"   Задач в очереди: {mem_stats.get('tasks_pending', 0)}\n"
+            f"   Проектов: {mem_stats.get('projects', 0)}\n"
+        )
+
+        # Добавляем статистику ModelProfiler если есть
+        try:
+            from brain.model_profiler import ModelProfiler
+            profiler = ModelProfiler.get()
+            stats_text = profiler.get_stats_report()
+            if stats_text and stats_text != "Нет данных о профилях моделей.":
+                text += f"\n📈 **Статистика моделей:**\n{stats_text[:500]}"
+        except Exception:
+            pass
+
+        # Добавить статистику CoT + Episodic + ToolRegistry + TaskQueue
+        ev_parts = []
+        try:
+            if self._cot_engine:
+                s = self._cot_engine.get_stats()
+                ev_parts.append(
+                    f"🧠 CoT: {s.get('cot',0)} CoT / {s.get('tot',0)} ToT / "
+                    f"skip {s.get('fast',0)} / success {s.get('success_rate_pct',0)}%"
+                )
+        except Exception:
+            pass
+        try:
+            if self._episodic_memory:
+                s = self._episodic_memory.get_stats()
+                ev_parts.append(
+                    f"📖 Episodic: {s.get('total_episodes',0)} эпизодов, "
+                    f"{s.get('unique_sessions',0)} сессий, {s.get('consolidated',0)} consolidated"
+                )
+        except Exception:
+            pass
+        try:
+            if self._tool_registry:
+                s = self._tool_registry.get_stats()
+                ev_parts.append(
+                    f"🔧 Tools: {s.get('tools_enabled',0)}/{s.get('tools_registered',0)} включено, "
+                    f"{s.get('total_calls',0)} вызовов"
+                )
+        except Exception:
+            pass
+        try:
+            if self._task_queue:
+                s = self._task_queue.get_stats()
+                ev_parts.append(
+                    f"📋 Tasks: {s.get('pending',0)} в очереди, "
+                    f"{s.get('completed',0)} завершено, {s.get('failed',0)} ошибок"
+                )
+        except Exception:
+            pass
+
+        if ev_parts:
+            text += "\n🚀 **Evolution Components:**\n" + "\n".join(f"   {p}" for p in ev_parts)
+
+        trading_agent = self._agents.get("trading")
+        if trading_agent and hasattr(trading_agent, "get_status"):
+            try:
+                ts = trading_agent.get_status()
+                text += f"\n📈 Торговля: {ts}"
+            except Exception:
+                pass
+
+        return OrchestratorResponse(text=text, intent="status")
+
+    def _handle_memory_command(self, text: str) -> OrchestratorResponse:
+        text_lower = text.lower()
+        if any(w in text_lower for w in ["запомни", "сохрани", "remember", "save"]):
+            to_save = re.sub(
+                r"(запомни|сохрани|remember|save|добавь в память|add to memory)",
+                "", text, flags=re.IGNORECASE
+            ).strip()
+            if to_save:
+                entry_id = self._rag.save_knowledge(
+                    category="fact", title=to_save[:60],
+                    content=to_save, source="user", importance=0.7
+                )
+                return OrchestratorResponse(
+                    text=f"✅ Запомнено (ID: {entry_id}): {to_save[:100]}",
+                    intent="memory"
+                )
+
+        recent = self._rag.get_recent_history(limit=5)
+        if recent:
+            parts = [f"• [{m['role']}]: {m['content'][:100]}" for m in recent[-5:]]
+            return OrchestratorResponse(
+                text="📜 Последние сообщения:\n" + "\n".join(parts),
+                intent="memory"
+            )
+        return OrchestratorResponse(text="📭 Память пуста.", intent="memory")
+
+    # ── Верификация ───────────────────────────────────────────────────────────
+
+    def _verify(self, response: OrchestratorResponse,
+                request: OrchestratorRequest) -> OrchestratorResponse:
+        if len(response.text) < 100:
+            response.verified = True
+            return response
+
+        verify_prompt = (
+            f"Проверь ответ ИИ на запрос: «{request.text[:200]}»\n\n"
+            f"ОТВЕТ:\n{response.text[:1500]}\n\n"
+            f"JSON: {{\"ok\": true/false, \"issues\": [...], \"corrected\": \"...\"}}\n"
+            f"Если всё хорошо: {{\"ok\": true, \"issues\": [], \"corrected\": \"\"}}"
+        )
+        try:
+            verify_resp = self._llm.ask(LLMRequest(
+                messages=[{"role": "user", "content": verify_prompt}],
+                task_type="analysis",
+                max_tokens=500,
+                temperature=0.2,
+            ))
+            if verify_resp.success:
+                data = json.loads(
+                    re.search(r'\{.*\}', verify_resp.content, re.DOTALL).group()
+                )
+                if not data.get("ok") and data.get("corrected"):
+                    response.text = data["corrected"]
+                    issues = ', '.join(data.get('issues', []))
+                    response.text += f"\n\n_(Верификатор: {issues})_"
+                response.verified = True
+        except Exception as e:
+            log.debug("Verification skipped: %s", e)
+            response.verified = False
+        return response
+
+    # ── Уведомления ───────────────────────────────────────────────────────────
+
+    def _notify(self, response: OrchestratorResponse, source: str) -> None:
+        for cb in self._response_callbacks:
+            try:
+                cb(response, source)
+            except Exception as e:
+                log.debug("Response callback failed: %s", e)
+        self._bus.publish("brain.result", {
+            "text": response.text,
+            "intent": response.intent,
+            "agent": response.agent_used,
+            "source": source,
+        }, source="orchestrator")
+
+    # ── EventBus handler ──────────────────────────────────────────────────────
+
+    def _on_task_event(self, event: Any) -> None:
+        payload = event.payload or {}
+        text = payload.get("text", "")
+        source = payload.get("source", "internal")
+        if text:
+            req = OrchestratorRequest(text=text, source=source)
+            threading.Thread(target=self.process, args=(req,), daemon=True).start()

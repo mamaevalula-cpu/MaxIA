@@ -1,0 +1,252 @@
+# -*- coding: utf-8 -*-
+"""
+memory/rag_engine.py — RAG-движок для получения релевантного контекста.
+
+Стратегия извлечения:
+  1. FTS (keyword search) по SQLite messages + knowledge
+  2. Семантический поиск через VectorStoreManager (если доступен)
+  3. Слияние + дедупликация + ранжирование по score
+  4. Форматирование в строку контекста для промпта
+
+Пример:
+    rag = RAGEngine.get()
+    context = rag.get_context("как торговать на bybit", max_tokens=2000)
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+import time
+from typing import Dict, List, Optional, Tuple
+
+from memory.memory_store import KnowledgeEntry, MemoryStore, Message
+
+log = logging.getLogger("memory.rag")
+
+
+def _count_tokens(text: str) -> int:
+    """Приблизительный подсчёт токенов (1 токен ≈ 4 символа)."""
+    return max(1, len(text) // 4)
+
+
+def _keyword_score(text: str, query_words: List[str]) -> float:
+    """Простой TF-скор совпадения слов."""
+    text_lower = text.lower()
+    total = len(query_words)
+    if total == 0:
+        return 0.0
+    matches = sum(1 for w in query_words if w in text_lower)
+    return matches / total
+
+
+class RAGResult:
+    """Единица результата RAG-поиска."""
+    def __init__(self, content: str, source: str, category: str,
+                 score: float, ts: float):
+        self.content  = content
+        self.source   = source
+        self.category = category
+        self.score    = score
+        self.ts       = ts
+
+
+class RAGEngine:
+    """
+    Движок извлечения релевантного контекста для промптов.
+    Singleton.
+    """
+
+    _instance: Optional["RAGEngine"] = None
+
+    def __init__(self) -> None:
+        self._memory = MemoryStore.get()
+        self._vector_mgr = None  # будет подключён позже
+
+    @classmethod
+    def get(cls) -> "RAGEngine":
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def set_vector_manager(self, vector_mgr) -> None:
+        """Подключить VectorStoreManager для семантического поиска."""
+        self._vector_mgr = vector_mgr
+        log.info("RAGEngine: vector manager connected")
+
+    # ── Главный метод ─────────────────────────────────────────────────────────
+
+    def get_context(
+        self,
+        query: str,
+        max_tokens: int = 2000,
+        categories: Optional[List[str]] = None,
+        include_messages: bool = True,
+        include_knowledge: bool = True,
+        session_id: str = "",
+    ) -> str:
+        """
+        Получить строку контекста для вставки в промпт.
+
+        Args:
+            query:            текст запроса
+            max_tokens:       максимальный размер контекста в токенах
+            categories:       фильтр категорий знаний
+            include_messages: включить историю диалога
+            include_knowledge: включить базу знаний
+            session_id:       ограничить поиск конкретной сессией
+
+        Returns:
+            Строка контекста, готовая к вставке в system prompt.
+        """
+        results: List[RAGResult] = []
+        query_words = re.findall(r'\w+', query.lower())
+
+        # 1. Поиск в базе знаний
+        _used_entry_ids: List[int] = []
+        if include_knowledge:
+            for cat in (categories or [""]):
+                entries = self._memory.search_knowledge(query, category=cat, limit=15)
+                for e in entries:
+                    score = _keyword_score(e.content + " " + e.title, query_words)
+                    score += e.importance * 0.3   # бонус за важность
+                    score += getattr(e, "confidence", 0.5) * 0.1  # бонус за уверенность
+                    results.append(RAGResult(
+                        content=f"[{e.category}] {e.title}:\n{e.content}",
+                        source=e.source, category=e.category,
+                        score=score, ts=e.ts
+                    ))
+                    _used_entry_ids.append(e.id)
+
+        # 2. Поиск в истории диалогов
+        if include_messages:
+            messages = self._memory.search_messages(query, limit=10)
+            for m in messages:
+                score = _keyword_score(m.content, query_words)
+                # Свежие сообщения получают бонус
+                age_bonus = max(0, 1.0 - (time.time() - m.ts) / 86400)  # max бонус за 24ч
+                score += age_bonus * 0.2
+                results.append(RAGResult(
+                    content=f"[{m.role} @ {m.source}]: {m.content[:500]}",
+                    source=m.source, category="message",
+                    score=score, ts=m.ts
+                ))
+
+        # 3. Семантический поиск (если есть VectorManager)
+        if self._vector_mgr is not None:
+            try:
+                vec_results = self._vector_mgr.search(query, limit=10, collection="main")
+                for vr in vec_results:
+                    results.append(RAGResult(
+                        content=vr.get("content", ""),
+                        source=vr.get("source", "vector"),
+                        category=vr.get("category", "vector"),
+                        score=vr.get("score", 0.5) + 0.1,  # бонус за семантику
+                        ts=vr.get("ts", 0.0)
+                    ))
+            except Exception as e:
+                log.debug("Vector search failed: %s", e)
+
+        # 4. Дедупликация и сортировка
+        results = self._deduplicate(results)
+        results.sort(key=lambda r: r.score, reverse=True)
+
+        # 5. Обрезка по max_tokens
+        context_parts = []
+        used_tokens = 0
+        for r in results:
+            tokens = _count_tokens(r.content)
+            if used_tokens + tokens > max_tokens:
+                break
+            context_parts.append(r.content)
+            used_tokens += tokens
+
+        if not context_parts:
+            return ""
+
+        context = "\n\n---\n\n".join(context_parts)
+        log.debug("RAG: query=%r → %d results, %d tokens",
+                  query[:50], len(context_parts), used_tokens)
+
+        # Трекинг: отметить применённые знания (async-safe, non-blocking)
+        if _used_entry_ids:
+            self._track_knowledge_used(_used_entry_ids[:len(context_parts)], query)
+
+        return context
+
+    def _track_knowledge_used(self, entry_ids: List[int], query: str) -> None:
+        """Отмечаем usage_count и пишем в training_log (без блокировки)."""
+        try:
+            from training.training_journal import TrainingJournal
+            journal = TrainingJournal.get()
+            for eid in entry_ids:
+                self._memory.record_knowledge_used(eid)
+                journal.record_apply(eid, query=query, agent="rag")
+        except Exception as e:
+            log.debug("RAG track usage failed: %s", e)
+
+    def get_recent_history(self, session_id: str = "", limit: int = 20,
+                           source: str = "") -> List[Dict]:
+        """Получить последние сообщения как список dict для промпта."""
+        messages = self._memory.get_messages(
+            session_id=session_id, source=source, limit=limit
+        )
+        return [{"role": m.role, "content": m.content} for m in messages]
+
+    def get_relevant_knowledge(self, query: str, limit: int = 5) -> str:
+        """Получить релевантные знания в виде строки."""
+        entries = self._memory.search_knowledge(query, limit=limit)
+        if not entries:
+            return ""
+        parts = [f"• [{e.category}] {e.title}: {e.content[:300]}" for e in entries]
+        return "Релевантные знания:\n" + "\n".join(parts)
+
+    # ── Сохранение в память ───────────────────────────────────────────────────
+
+    def learn_from_interaction(self, user_text: str, ai_reply: str,
+                               source: str = "chat", session_id: str = "") -> None:
+        """Сохранить взаимодействие в память."""
+        from memory.memory_store import Message
+        self._memory.add_message(Message(
+            role="user", content=user_text,
+            source=source, session_id=session_id
+        ))
+        self._memory.add_message(Message(
+            role="assistant", content=ai_reply,
+            source=source, session_id=session_id
+        ))
+
+    def save_knowledge(self, category: str, title: str, content: str,
+                       tags: List[str] = None, importance: float = 0.5,
+                       source: str = "") -> int:
+        """Сохранить новое знание."""
+        entry = KnowledgeEntry(
+            category=category, title=title, content=content,
+            tags=tags or [], source=source, importance=importance
+        )
+        entry_id = self._memory.add_knowledge(entry)
+        # Также добавить в векторную базу если доступна
+        if self._vector_mgr is not None:
+            try:
+                self._vector_mgr.add(
+                    collection="main",
+                    text=f"{title}\n{content}",
+                    metadata={"category": category, "title": title,
+                              "source": source, "id": entry_id}
+                )
+            except Exception as e:
+                log.debug("Vector add failed: %s", e)
+        return entry_id
+
+    # ── Вспомогательные ──────────────────────────────────────────────────────
+
+    def _deduplicate(self, results: List[RAGResult]) -> List[RAGResult]:
+        """Убрать дубликаты по содержимому (первые 100 символов)."""
+        seen = set()
+        unique = []
+        for r in results:
+            key = r.content[:100].lower().strip()
+            if key not in seen:
+                seen.add(key)
+                unique.append(r)
+        return unique

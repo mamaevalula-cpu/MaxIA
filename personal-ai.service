@@ -1,0 +1,36 @@
+#!/bin/bash
+# Systemd service файл для Linux (сохранить в /etc/systemd/system/personal-ai.service)
+
+[Unit]
+Description=Personal AI Server - 24/7 Autonomous System
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/personal-ai
+ExecStart=/usr/bin/python3 /home/ubuntu/personal-ai/server_launcher.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+Environment="PYTHONUNBUFFERED=1"
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/home/ubuntu/personal-ai/logs /home/ubuntu/personal-ai/data
+
+[Install]
+WantedBy=multi-user.target
+
+# Использование:
+# sudo cp personal-ai.service /etc/systemd/system/
+# sudo systemctl daemon-reload
+# sudo systemctl enable personal-ai
+# sudo systemctl start personal-ai
+# sudo systemctl status personal-ai
+# sudo journalctl -u personal-ai -f

@@ -1,0 +1,3 @@
+# Requirements for deployment_config_service
+python-dotenv
+httpx

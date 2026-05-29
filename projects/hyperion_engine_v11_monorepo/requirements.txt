@@ -1,0 +1,9 @@
+# Корпорация MaxAI v11.0 — Agent Marketplace
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.7.0
+httpx>=0.27.0
+python-dotenv>=1.0.0
+aiosqlite>=0.20.0
+structlog>=24.2.0
+prometheus-client>=0.20.0

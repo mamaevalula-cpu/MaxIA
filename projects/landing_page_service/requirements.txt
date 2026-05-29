@@ -1,0 +1,3 @@
+# Requirements for landing_page_service
+python-dotenv
+httpx

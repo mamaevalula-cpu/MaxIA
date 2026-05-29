@@ -1,0 +1,2198 @@
+# -*- coding: utf-8 -*-
+"""
+agents/telegram_agent.py — Telegram-агент v4.0 (Invite-Only + Full Access)
+
+Архитектура безопасности:
+  ┌─────────────────────────────────────────────────┐
+  │  OWNER (TELEGRAM_CHAT_ID)                       │
+  │   ├─ генерирует инвайт-ссылки (/invite)         │
+  │   ├─ управляет пользователями (/users /revoke)  │
+  │   └─ все команды без ограничений                │
+  ├─────────────────────────────────────────────────┤
+  │  ADMIN (TELEGRAM_ADMIN_IDS)                     │
+  │   ├─ все рабочие команды                        │
+  │   └─ не может генерировать инвайты              │
+  ├─────────────────────────────────────────────────┤
+  │  USER (авторизован через инвайт-ссылку)         │
+  │   ├─ чат с AI, /status, /help, /balance         │
+  │   └─ НЕТ: /learn, /plan, /keys, /invite         │
+  └─────────────────────────────────────────────────┘
+  ╳ НЕАВТОРИЗОВАН → "Доступ запрещён"
+
+Invite system:
+  /invite          → бот генерирует токен
+  https://t.me/BOT?start=INVITE_<token>
+  → новый юзер жмёт ссылку → /start INVITE_<token>
+  → бот проверяет токен → добавляет в whitelist
+  → токен сгорает (single-use, TTL 24h по умолчанию)
+
+Команды:
+  /start [token]   — авторизация или приветствие
+  /help            — список команд
+  /status          — полный статус системы
+  /health          — самодиагностика
+  /agents          — список агентов
+  /keys            — статус API ключей
+  /balance         — баланс Bybit
+  /positions       — открытые позиции
+  /trading         — дашборд торгового бота
+  /pnl             — P&L за сегодня
+  /bot [cmd]       — управление торговым ботом
+  /ask <вопрос>    — спросить AI
+  /plan <задача>   — выполнить автономную задачу
+  /math <выражение>— вычислить
+  /news [тема]     — новости
+  /learn           — цикл самообучения (ADMIN+)
+  /cot             — Chain-of-Thought отчёт
+  /episodic        — эпизодическая память
+  /queue           — очередь задач
+  /tools           — инструменты
+  /invite [days]   — сгенерировать инвайт (OWNER)
+  /users           — список пользователей (OWNER)
+  /revoke <id>     — отозвать доступ (OWNER)
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import logging
+import re
+import sqlite3
+import threading
+import time
+import uuid
+from dataclasses import dataclass
+from enum import IntEnum
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Set
+
+from agents.base_agent import AgentInfo, AgentStatus, BaseAgent
+from core.config import cfg
+from memory.memory_store import Message, MemoryStore
+
+log = logging.getLogger("agents.telegram")
+
+# ── Константы ─────────────────────────────────────────────────────────────────
+
+TELEGRAM_CHUNK_SIZE = 4000       # чуть меньше лимита Telegram для запаса
+MAX_CHUNKS          = 12         # максимум чанков за один ответ (48 000 chars max)
+RECONNECT_DELAYS    = [5, 10, 30, 60, 120, 300]
+DEFAULT_INVITE_TTL  = 24 * 3600  # 24 часа по умолчанию
+
+AUTH_DB_PATH = Path(__file__).parent.parent / "data" / "telegram_auth.db"
+
+
+# ── Уровни доступа ────────────────────────────────────────────────────────────
+
+class AccessLevel(IntEnum):
+    BLOCKED = 0
+    USER    = 1
+    ADMIN   = 2
+    OWNER   = 3
+
+
+@dataclass
+class TelegramUser:
+    user_id:      int
+    username:     str
+    full_name:    str
+    access:       AccessLevel
+    joined_at:    float
+    last_seen:    float
+    message_count: int = 0
+    invited_by:   Optional[int] = None
+
+
+# ── База данных авторизации ────────────────────────────────────────────────────
+
+class AuthDB:
+    """SQLite-хранилище авторизованных пользователей и инвайт-токенов."""
+
+    _CREATE_USERS = """
+    CREATE TABLE IF NOT EXISTS tg_users (
+        user_id       INTEGER PRIMARY KEY,
+        username      TEXT,
+        full_name     TEXT,
+        access        INTEGER DEFAULT 1,
+        joined_at     REAL,
+        last_seen     REAL,
+        message_count INTEGER DEFAULT 0,
+        invited_by    INTEGER
+    )"""
+
+    _CREATE_INVITES = """
+    CREATE TABLE IF NOT EXISTS tg_invites (
+        token       TEXT PRIMARY KEY,
+        created_by  INTEGER NOT NULL,
+        created_at  REAL NOT NULL,
+        expires_at  REAL NOT NULL,
+        used_by     INTEGER,
+        used_at     REAL,
+        label       TEXT DEFAULT ''
+    )"""
+
+    def __init__(self, path: Path = AUTH_DB_PATH) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._path = path
+        self._init_db()
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(self._path), timeout=5, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _init_db(self) -> None:
+        with self._connect() as conn:
+            conn.execute(self._CREATE_USERS)
+            conn.execute(self._CREATE_INVITES)
+            conn.commit()
+
+    # ── Пользователи ─────────────────────────────────────────────────────────
+
+    def get_user(self, user_id: int) -> Optional[TelegramUser]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM tg_users WHERE user_id = ?", (user_id,)
+            ).fetchone()
+        if not row:
+            return None
+        return TelegramUser(
+            user_id=row["user_id"], username=row["username"] or "",
+            full_name=row["full_name"] or "", access=AccessLevel(row["access"]),
+            joined_at=row["joined_at"], last_seen=row["last_seen"],
+            message_count=row["message_count"], invited_by=row["invited_by"],
+        )
+
+    def upsert_user(self, user: TelegramUser) -> None:
+        with self._connect() as conn:
+            conn.execute("""
+                INSERT INTO tg_users
+                    (user_id, username, full_name, access, joined_at, last_seen,
+                     message_count, invited_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    username=excluded.username,
+                    full_name=excluded.full_name,
+                    access=excluded.access,
+                    last_seen=excluded.last_seen,
+                    message_count=tg_users.message_count + excluded.message_count
+            """, (user.user_id, user.username, user.full_name, int(user.access),
+                  user.joined_at, user.last_seen, user.message_count, user.invited_by))
+            conn.commit()
+
+    def set_access(self, user_id: int, access: AccessLevel) -> bool:
+        with self._connect() as conn:
+            n = conn.execute(
+                "UPDATE tg_users SET access = ? WHERE user_id = ?",
+                (int(access), user_id)
+            ).rowcount
+            conn.commit()
+        return n > 0
+
+    def bump_seen(self, user_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE tg_users SET last_seen = ?, message_count = message_count + 1 WHERE user_id = ?",
+                (time.time(), user_id)
+            )
+            conn.commit()
+
+    def list_users(self) -> List[TelegramUser]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM tg_users ORDER BY joined_at DESC"
+            ).fetchall()
+        return [
+            TelegramUser(
+                user_id=r["user_id"], username=r["username"] or "",
+                full_name=r["full_name"] or "", access=AccessLevel(r["access"]),
+                joined_at=r["joined_at"], last_seen=r["last_seen"],
+                message_count=r["message_count"], invited_by=r["invited_by"],
+            )
+            for r in rows
+        ]
+
+    # ── Инвайты ──────────────────────────────────────────────────────────────
+
+    def create_invite(self, created_by: int, ttl_sec: float = DEFAULT_INVITE_TTL,
+                      label: str = "") -> str:
+        token = uuid.uuid4().hex[:16]
+        now   = time.time()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO tg_invites (token, created_by, created_at, expires_at, label) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (token, created_by, now, now + ttl_sec, label)
+            )
+            conn.commit()
+        return token
+
+    def use_invite(self, token: str, user_id: int) -> bool:
+        """Проверить и сжечь инвайт-токен. Возвращает True если валиден."""
+        now = time.time()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM tg_invites WHERE token = ?", (token,)
+            ).fetchone()
+            if not row:
+                return False
+            if row["used_by"] is not None:
+                return False   # уже использован
+            if row["expires_at"] < now:
+                return False   # истёк
+            conn.execute(
+                "UPDATE tg_invites SET used_by = ?, used_at = ? WHERE token = ?",
+                (user_id, now, token)
+            )
+            conn.commit()
+        return True
+
+    def list_invites(self, active_only: bool = True) -> List[Dict]:
+        with self._connect() as conn:
+            if active_only:
+                rows = conn.execute(
+                    "SELECT * FROM tg_invites WHERE used_by IS NULL AND expires_at > ? "
+                    "ORDER BY created_at DESC",
+                    (time.time(),)
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM tg_invites ORDER BY created_at DESC LIMIT 20"
+                ).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ── Вспомогательные функции ────────────────────────────────────────────────────
+
+def _split_message(text: str, chunk_size: int = TELEGRAM_CHUNK_SIZE) -> List[str]:
+    """Разбить длинный текст на чанки ≤ chunk_size по абзацам/строкам."""
+    if len(text) <= chunk_size:
+        return [text]
+    chunks = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= chunk_size:
+            chunks.append(remaining)
+            break
+        split_at = remaining.rfind("\n\n", 0, chunk_size)
+        if split_at == -1:
+            split_at = remaining.rfind("\n", 0, chunk_size)
+        if split_at == -1:
+            split_at = remaining.rfind(" ", 0, chunk_size)
+        if split_at == -1:
+            split_at = chunk_size
+        chunks.append(remaining[:split_at].rstrip())
+        remaining = remaining[split_at:].lstrip()
+    return chunks[:MAX_CHUNKS]
+
+
+def _escape_md(text: str) -> str:
+    """Экранировать спецсимволы MarkdownV2."""
+    escape_chars = r"_*[]()~`>#+-=|{}.!\\"
+    return re.sub(f"([{re.escape(escape_chars)}])", r"\\\1", text)
+
+
+# ── Главный агент ─────────────────────────────────────────────────────────────
+
+class TelegramAgent(BaseAgent):
+    """
+    Telegram-агент v4.0 с системой инвайтов и уровнями доступа.
+    Работает в отдельном потоке. Полностью thread-safe.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("telegram")
+        self._application = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._thread: Optional[threading.Thread] = None
+        self._brain_callback: Optional[Callable] = None
+        self._watchdog: Optional[Any] = None
+        self._reconnect_attempt = 0
+        self._db = AuthDB()
+        self._bot_username: str = ""
+
+        # Owner ID из .env (всегда имеет полный доступ)
+        self._owner_id: int = int(cfg.telegram_chat_id) if cfg.telegram_chat_id else 0
+
+        # Дополнительные admin IDs из .env (через запятую)
+        admin_env = cfg.telegram_admin_ids if hasattr(cfg, "telegram_admin_ids") else ""
+        self._admin_ids: Set[int] = set()
+        for aid in (admin_env or "").split(","):
+            aid = aid.strip()
+            if aid.isdigit():
+                self._admin_ids.add(int(aid))
+
+        # Auto-register owner as OWNER level
+        if self._owner_id:
+            self._ensure_owner_registered()
+
+    def _ensure_owner_registered(self) -> None:
+        """Убедиться что owner зарегистрирован в БД."""
+        existing = self._db.get_user(self._owner_id)
+        if not existing:
+            self._db.upsert_user(TelegramUser(
+                user_id=self._owner_id, username="owner", full_name="Owner",
+                access=AccessLevel.OWNER, joined_at=time.time(),
+                last_seen=time.time(),
+            ))
+        elif existing.access != AccessLevel.OWNER:
+            self._db.set_access(self._owner_id, AccessLevel.OWNER)
+
+    # ── Проверка доступа ──────────────────────────────────────────────────────
+
+    def _get_access(self, user_id: int) -> AccessLevel:
+        """Определить уровень доступа пользователя."""
+        if user_id == self._owner_id:
+            return AccessLevel.OWNER
+        if user_id in self._admin_ids:
+            return AccessLevel.ADMIN
+        user = self._db.get_user(user_id)
+        if user:
+            return user.access
+        return AccessLevel.BLOCKED
+
+    def _is_authorized(self, user_id: int, min_level: AccessLevel = AccessLevel.USER) -> bool:
+        return self._get_access(user_id) >= min_level
+
+    # ── Public API ─────────────────────────────────────────────────────────────
+
+    def info(self) -> AgentInfo:
+        return AgentInfo(
+            name="telegram",
+            description="Telegram-бот v4.0 (invite-only). Управление AI и торговым ботом.",
+            capabilities=[
+                "send_message", "receive_message", "notify",
+                "broadcast", "chunked_reply", "command_routing",
+                "invite_system", "access_control",
+            ],
+        )
+
+    def can_handle(self, text: str) -> bool:
+        patterns = [
+            r"(отправь|пошли|send).*(telegram|телеграм|сообщени)",
+            r"(telegram|телеграм).*(бот|bot|уведомлени|notification)",
+        ]
+        return any(re.search(p, text, re.IGNORECASE) for p in patterns)
+
+    def process(self, text: str, source: str = "gui") -> str:
+        t = text.lower()
+        if any(w in t for w in ["статус", "status"]):
+            return self._get_status_str()
+        if any(w in t for w in ["запусти", "старт", "start"]):
+            return self.start_polling()
+        if any(w in t for w in ["останови", "стоп", "stop"]):
+            self.stop()
+            return "🔴 Telegram-бот остановлен."
+        m = re.search(r'(?:отправь|send|пошли)\s+["\']?(.+)["\']?', text, re.IGNORECASE)
+        if m:
+            return self.send_message(m.group(1).strip())
+        return self._get_status_str()
+
+    def set_brain_callback(self, cb: Callable) -> None:
+        self._brain_callback = cb
+
+    def set_watchdog(self, watchdog: Any) -> None:
+        self._watchdog = watchdog
+
+    # ── Жизненный цикл ────────────────────────────────────────────────────────
+
+    def start(self) -> None:
+        if not cfg.telegram_token:
+            log.warning("Telegram token not set — agent disabled")
+            self._set_status(AgentStatus.STOPPED)
+            return
+        self._stop_event.clear()
+        self._reconnect_attempt = 0
+        self._thread = threading.Thread(
+            target=self._run_bot_with_restart, name="telegram-agent", daemon=True
+        )
+        self._thread.start()
+        self._set_status(AgentStatus.RUNNING)
+        log.info("TelegramAgent v4.0 started (invite-only mode)")
+
+    def start_polling(self) -> str:
+        if not cfg.telegram_token:
+            return "⚠️ Telegram токен не настроен. Добавь TELEGRAM_BOT_TOKEN в .env"
+        self.start()
+        return "🟢 Telegram-бот v4.0 запущен (invite-only)."
+
+    def stop(self) -> None:
+        super().stop()
+        if self._application and self._loop:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self._application.stop(), self._loop
+                ).result(timeout=5)
+            except Exception:
+                pass
+
+    # ── Отправка ──────────────────────────────────────────────────────────────
+
+    def send_message(self, text: str, chat_id: str = "") -> str:
+        chat_id = chat_id or cfg.telegram_chat_id
+        if not chat_id:
+            return "⚠️ TELEGRAM_CHAT_ID не настроен."
+        chunks = _split_message(text)
+        if self._loop and self._application:
+            try:
+                for chunk in chunks:
+                    asyncio.run_coroutine_threadsafe(
+                        self._application.bot.send_message(
+                            chat_id=chat_id, text=chunk, parse_mode="HTML"
+                        ),
+                        self._loop
+                    ).result(timeout=10)
+                suffix = f" ({len(chunks)} частей)" if len(chunks) > 1 else ""
+                return f"✅ Сообщение отправлено{suffix}."
+            except Exception as e:
+                log.warning("send_message via app failed: %s — trying direct", e)
+                return self._send_direct(text, chat_id)
+        return self._send_direct(text, chat_id)
+
+    def send_notification(self, text: str, chat_id: str = "") -> None:
+        try:
+            self.send_message(text, chat_id)
+        except Exception:
+            pass
+
+    notify = send_notification
+
+    def _send_direct(self, text: str, chat_id: str) -> str:
+        if not cfg.telegram_token:
+            return "⚠️ TELEGRAM_BOT_TOKEN не настроен."
+        try:
+            import httpx
+            url = f"https://api.telegram.org/bot{cfg.telegram_token}/sendMessage"
+            chunks = _split_message(text)
+            for chunk in chunks:
+                self._send_direct_chunk(url, chat_id, chunk)
+            suffix = f" ({len(chunks)} частей)" if len(chunks) > 1 else ""
+            return f"✅ Отправлено{suffix}."
+        except Exception as e:
+            log.error("_send_direct failed: %s", e)
+            # Попробовать добавить в offline-очередь
+            try:
+                from agents.telegram_resilience import get_resilient_bot
+                get_resilient_bot().enqueue(chat_id, text, priority=3)
+                return f"⚠️ В очереди: {e}"
+            except Exception:
+                return f"❌ Ошибка: {e}"
+
+    def _send_direct_chunk(self, url: str, chat_id: str, text: str) -> None:
+        """Отправить один чанк с retry (exponential backoff)."""
+        import httpx
+        import random as _random
+
+        delays = [1, 3, 10, 30, 60]
+        last_err: Optional[Exception] = None
+
+        for attempt, delay in enumerate(delays):
+            try:
+                resp = httpx.post(url, json={
+                    "chat_id": chat_id, "text": text, "parse_mode": "HTML"
+                }, timeout=12, verify=False)
+
+                if resp.status_code == 429:
+                    retry_after = float(resp.json().get("parameters", {}).get("retry_after", delay))
+                    log.warning("Telegram 429 — retry after %.0fs", retry_after)
+                    time.sleep(retry_after + _random.uniform(0, 2))
+                    continue
+
+                if resp.status_code >= 500:
+                    raise IOError(f"Telegram server error {resp.status_code}")
+
+                resp.raise_for_status()
+                return  # success
+
+            except Exception as e:
+                last_err = e
+                if attempt < len(delays) - 1:
+                    jitter = _random.uniform(0, 1.5)
+                    log.warning("Send chunk attempt %d failed: %s — retry in %.1fs",
+                                attempt + 1, e, delay + jitter)
+                    time.sleep(delay + jitter)
+
+        raise last_err or IOError("All send attempts failed")
+
+    def _get_status_str(self) -> str:
+        users = self._db.list_users()
+        invites = self._db.list_invites(active_only=True)
+        return (
+            f"📱 Telegram-агент v4.0 [{self._status.value}]\n"
+            f"  Токен: {'✅' if cfg.telegram_token else '❌'}\n"
+            f"  Chat ID: {'✅' if cfg.telegram_chat_id else '❌'}\n"
+            f"  Авторизовано: {len(users)} пользователей\n"
+            f"  Активных инвайтов: {len(invites)}\n"
+            f"  Owner ID: {self._owner_id or '—'}"
+        )
+
+    # ── Перезапуск ────────────────────────────────────────────────────────────
+
+    def _reset_telegram_session(self) -> None:
+        """
+        Сбросить polling-сессию через Telegram Bot API.
+        Вызывается перед каждым рестартом чтобы избежать Conflict 409.
+        """
+        try:
+            import urllib.request as _ur
+            token = cfg.telegram_token
+            base  = f"https://api.telegram.org/bot{token}"
+            # 1. Удалить webhook (если есть)
+            _ur.urlopen(f"{base}/deleteWebhook?drop_pending_updates=true", timeout=8)
+            # 2. getUpdates с timeout=0 — сбивает предыдущую long-poll сессию
+            _ur.urlopen(f"{base}/getUpdates?timeout=0&offset=-1", timeout=8)
+            log.info("Telegram polling session reset OK")
+        except Exception as e:
+            log.warning("Telegram session reset failed (non-critical): %s", e)
+
+    def _run_bot_with_restart(self) -> None:
+        # ALWAYS reset the session on startup (not just on restart).
+        # After systemctl restart, the previous getUpdates long-poll may still
+        # be alive on Telegram's servers for up to 45s — reset it first.
+        log.info("Telegram: resetting session before first start...")
+        self._reset_telegram_session()
+        self._stop_event.wait(timeout=5)  # give Telegram time to expire old session
+
+        while not self._stop_event.is_set():
+            try:
+                self._run_bot()
+            except Exception as e:
+                err_str = str(e)
+                log.error("Telegram bot crashed: %s", e)
+                self._set_status(AgentStatus.ERROR)
+                # Conflict 409 требует длинной паузы (Telegram держит сессию ~30с)
+                is_conflict = "conflict" in err_str.lower() or "409" in err_str
+                if is_conflict:
+                    log.warning("Telegram Conflict detected — waiting 65s for session to expire...")
+                    self._stop_event.wait(timeout=65)
+                    log.info("Resetting Telegram session after conflict wait...")
+                    self._reset_telegram_session()
+                    self._stop_event.wait(timeout=5)
+                    continue  # после паузы сразу пробуем — delay ниже пропускаем
+            if self._stop_event.is_set():
+                break
+            # Normal restart path: reset session + wait
+            log.info("Resetting Telegram session before restart...")
+            self._reset_telegram_session()
+            delay = RECONNECT_DELAYS[min(self._reconnect_attempt, len(RECONNECT_DELAYS) - 1)]
+            self._reconnect_attempt += 1
+            log.warning("Telegram reconnecting in %ds (attempt #%d)...", delay, self._reconnect_attempt)
+            self._set_status(AgentStatus.WAITING)
+            self._stop_event.wait(timeout=max(delay, 10))
+        self._set_status(AgentStatus.STOPPED)
+
+    # ── Основной bot loop ─────────────────────────────────────────────────────
+
+    def _run_bot(self) -> None:
+        try:
+            from telegram import (Update, InlineKeyboardButton, InlineKeyboardMarkup,
+                                   BotCommand)
+            from telegram.ext import (Application, CommandHandler,
+                                       MessageHandler, CallbackQueryHandler,
+                                       filters, ContextTypes)
+            from telegram.constants import ParseMode, ChatAction
+        except ImportError:
+            log.error("python-telegram-bot не установлен! pip install python-telegram-bot")
+            self._set_status(AgentStatus.ERROR)
+            return
+
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+
+        # ── ResilientBot — queue drainer + connection guard ────────────────────
+        try:
+            from agents.telegram_resilience import get_resilient_bot
+            self._resilient = get_resilient_bot()
+
+            async def _async_send(chat_id, text, **kw):
+                await app_holder[0].bot.send_message(
+                    chat_id=chat_id, text=text, parse_mode="HTML", **kw)
+
+            self._resilient.set_send_fn(_async_send)
+            self._resilient.start_queue_drainer(self._loop)
+            self._resilient.mark_connected()
+        except Exception as _re:
+            log.debug("ResilientBot init skipped: %s", _re)
+            self._resilient = None
+        app_holder: list = [None]  # filled after Application is built below
+
+        # ── Вспомогательные функции ───────────────────────────────────────────
+
+        async def _reply(update: Update, text: str,
+                         parse_mode: str = ParseMode.HTML) -> None:
+            """Ответить с авто-чанкингом. При > 6000 символов — отправляет файл .txt."""
+            if not text:
+                text = "(пустой ответ)"
+            # Очень длинный ответ → отправить как файл
+            if len(text) > 6000:
+                try:
+                    import io as _bio
+                    # Для очень длинных ответов отправляем как файл
+                    filename = "response.txt"
+                    caption = f"📄 Ответ ({len(text):,} симв.) прикреплён как файл."
+                    doc = _bio.BytesIO(text.encode("utf-8"))
+                    doc.name = filename
+                    await update.message.reply_document(
+                        document=doc,
+                        filename=filename,
+                        caption=caption,
+                        parse_mode=None
+                    )
+                    return
+                except Exception as _fe:
+                    log.warning("File send failed, fallback to chunks: %s", _fe)
+            chunks = _split_message(text)
+            for i, chunk in enumerate(chunks):
+                sent = False
+                for pm in (parse_mode, None):
+                    try:
+                        await update.message.reply_text(chunk, parse_mode=pm)
+                        sent = True
+                        break
+                    except Exception:
+                        if pm is None:
+                            log.warning("Failed to send chunk %d of message", i)
+                if not sent:
+                    break
+
+        async def _typing(update: Update, context) -> None:
+            await context.bot.send_chat_action(
+                chat_id=update.effective_chat.id, action=ChatAction.TYPING
+            )
+
+        def _access_denied_text(user_id: int) -> str:
+            return (
+                "🚫 <b>Доступ запрещён</b>\n\n"
+                "Этот бот работает только по приглашениям.\n"
+                "Если у тебя есть инвайт-ссылка — нажми на неё.\n\n"
+                f"Твой ID: <code>{user_id}</code>"
+            )
+
+        # ── Middleware: проверка доступа ──────────────────────────────────────
+
+        def _check_access(min_level: AccessLevel = AccessLevel.USER):
+            """Декоратор для проверки уровня доступа."""
+            def decorator(func):
+                async def wrapper(update: Update, context) -> None:
+                    user = update.effective_user
+                    if not user:
+                        return
+                    uid = user.id
+                    level = self._get_access(uid)
+                    if level < min_level:
+                        log.warning("Unauthorized access attempt: uid=%d username=%s",
+                                    uid, user.username)
+                        # Логируем в файл
+                        with open("logs/telegram_blocked.log", "a",
+                                  encoding="utf-8") as f:
+                            f.write(
+                                f"{time.strftime('%Y-%m-%d %H:%M:%S')} "
+                                f"BLOCKED uid={uid} @{user.username} "
+                                f"'{(update.message.text or '')[:60]}'\n"
+                            )
+                        await update.message.reply_text(
+                            _access_denied_text(uid), parse_mode=ParseMode.HTML
+                        )
+                        return
+                    # Обновить last_seen
+                    self._db.bump_seen(uid)
+                    await func(update, context)
+                return wrapper
+            return decorator
+
+        # ── /start — авторизация через инвайт ────────────────────────────────
+
+        async def _start_cmd(update: Update, context) -> None:
+            user = update.effective_user
+            uid  = user.id
+            args = context.args or []
+
+            # Проверка инвайт-токена
+            if args and args[0].startswith("INVITE_"):
+                token = args[0][7:]   # убрать "INVITE_"
+                existing = self._db.get_user(uid)
+                if existing and existing.access >= AccessLevel.USER:
+                    await update.message.reply_text(
+                        "✅ Ты уже авторизован!\nНапиши что-нибудь или /help",
+                        parse_mode=ParseMode.HTML
+                    )
+                    return
+                if self._db.use_invite(token, uid):
+                    # Добавить пользователя
+                    new_user = TelegramUser(
+                        user_id=uid,
+                        username=user.username or "",
+                        full_name=user.full_name or "",
+                        access=AccessLevel.USER,
+                        joined_at=time.time(),
+                        last_seen=time.time(),
+                    )
+                    self._db.upsert_user(new_user)
+                    log.info("New user authorized via invite: uid=%d @%s", uid, user.username)
+                    # Уведомить владельца
+                    if self._owner_id and uid != self._owner_id:
+                        try:
+                            await context.bot.send_message(
+                                chat_id=self._owner_id,
+                                text=(
+                                    f"🔔 <b>Новый пользователь авторизован</b>\n"
+                                    f"ID: <code>{uid}</code>\n"
+                                    f"Имя: {user.full_name}\n"
+                                    f"Username: @{user.username or '—'}"
+                                ),
+                                parse_mode=ParseMode.HTML
+                            )
+                        except Exception:
+                            pass
+                    await update.message.reply_text(
+                        f"✅ <b>Добро пожаловать, {user.first_name}!</b>\n\n"
+                        f"Ты авторизован и теперь можешь использовать бота.\n"
+                        f"Напиши /help для списка команд или просто задай вопрос!",
+                        parse_mode=ParseMode.HTML
+                    )
+                    return
+                else:
+                    await update.message.reply_text(
+                        "❌ <b>Инвайт-ссылка недействительна</b>\n\n"
+                        "Возможные причины:\n"
+                        "• Ссылка уже использована\n"
+                        "• Ссылка истекла (срок 24 часа)\n"
+                        "• Неверный токен\n\n"
+                        "Попроси новую ссылку у владельца.",
+                        parse_mode=ParseMode.HTML
+                    )
+                    return
+
+            # Обычный /start (без токена)
+            level = self._get_access(uid)
+            if level >= AccessLevel.USER:
+                self._db.bump_seen(uid)
+                await update.message.reply_text(
+                    f"👋 <b>Привет, {user.first_name}!</b>\n\n"
+                    f"Уровень доступа: <b>{level.name}</b>\n"
+                    f"Напиши /help для списка всех команд.",
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                await update.message.reply_text(
+                    _access_denied_text(uid), parse_mode=ParseMode.HTML
+                )
+
+        # ── /help ─────────────────────────────────────────────────────────────
+
+        @_check_access(AccessLevel.USER)
+        async def _help_cmd(update: Update, context) -> None:
+            level = self._get_access(update.effective_user.id)
+            text = (
+                "🤖 <b>Personal AI — Команды</b>\n\n"
+                "<b>Основные:</b>\n"
+                "/status — состояние системы\n"
+                "/health — самодиагностика\n"
+                "/agents — список агентов\n"
+                "/keys — статус API ключей\n\n"
+                "<b>Торговля:</b>\n"
+                "/balance — баланс Bybit\n"
+                "/positions — открытые позиции\n"
+                "/trading — дашборд торгового бота\n"
+                "/pnl — P&L за сегодня\n"
+                "/bot start|stop|status — управление ботом\n\n"
+                "<b>AI:</b>\n"
+                "/ask &lt;вопрос&gt; — спросить AI\n"
+                "/plan &lt;задача&gt; — выполнить задачу\n"
+                "/math &lt;выражение&gt; — вычислить\n"
+                "/news [тема] — новости\n\n"
+                "<b>Аналитика:</b>\n"
+                "/cot — Chain-of-Thought отчёт\n"
+                "/episodic — эпизодическая память\n"
+                "/queue — очередь задач\n"
+                "/tools — инструменты\n"
+            )
+            if level >= AccessLevel.ADMIN:
+                text += (
+                    "\n<b>Администратор:</b>\n"
+                    "/learn — запустить самообучение\n"
+                    "/backup — резервная копия системы\n"
+                    "/backup list — список бэкапов\n"
+                )
+            if level >= AccessLevel.OWNER:
+                text += (
+                    "\n<b>Владелец:</b>\n"
+                    "/invite [hours] — создать инвайт-ссылку\n"
+                    "/users — список пользователей\n"
+                    "/revoke &lt;user_id&gt; — заблокировать\n"
+                    "/promote &lt;user_id&gt; admin — дать права\n"
+                )
+            text += "\n\nИли просто напиши сообщение — отвечу!"
+            await _reply(update, text)
+
+        # ── /status ───────────────────────────────────────────────────────────
+
+        @_check_access(AccessLevel.USER)
+        async def _status_cmd(update: Update, context) -> None:
+            await _typing(update, context)
+            try:
+                from brain.orchestrator import BrainOrchestrator, OrchestratorRequest
+                req = OrchestratorRequest(
+                    text="статус системы подробно",
+                    source="telegram",
+                    session_id=str(update.effective_user.id),
+                )
+                loop = asyncio.get_running_loop()
+                resp = await asyncio.wait_for(
+                    loop.run_in_executor(None, BrainOrchestrator.get().process, req),
+                    timeout=60
+                )
+                await _reply(update, resp.text)
+            except asyncio.TimeoutError:
+                await _reply(update, "⏳ Запрос статуса занял >60с — попробуй позже.")
+            except Exception as e:
+                log.error("_status_cmd error: %s", e)
+                await _reply(update, f"❌ Ошибка статуса: {e}")
+
+        # ── /health ───────────────────────────────────────────────────────────
+
+        @_check_access(AccessLevel.USER)
+        async def _health_cmd(update: Update, context) -> None:
+            await _typing(update, context)
+            if self._watchdog:
+                try:
+                    report = self._watchdog.force_check()
+                    await _reply(update, f"<pre>{report}</pre>")
+                except Exception as e:
+                    await _reply(update, f"❌ Watchdog error: {e}")
+            else:
+                # Базовая самодиагностика без watchdog
+                from brain.orchestrator import BrainOrchestrator
+                brain = BrainOrchestrator.get()
+                lines = [
+                    "🏥 <b>Самодиагностика системы</b>\n",
+                    f"✅ Brain: running",
+                    f"✅ Telegram: connected (attempt #{self._reconnect_attempt})",
+                    f"📊 Агентов: {len(brain._agents)}",
+                ]
+                try:
+                    from core.trading_bridge import TradingBridge
+                    bot = TradingBridge.get().get_status()
+                    lines.append(f"{'✅' if bot.online else '🔴'} Trading bot: {'online' if bot.online else 'offline'}")
+                except Exception:
+                    pass
+                try:
+                    from memory.episodic_memory import EpisodicMemory
+                    stats = EpisodicMemory.get().get_stats()
+                    lines.append(f"🧠 Эпизодов в памяти: {stats.get('total_episodes', 0)}")
+                except Exception:
+                    pass
+                await _reply(update, "\n".join(lines))
+
+        # ── /resilience ───────────────────────────────────────────────────────
+
+        @_check_access(AccessLevel.ADMIN)
+        async def _resilience_cmd(update: Update, context) -> None:
+            """Показать статус очереди сообщений и retry-системы."""
+            lines = ["🔄 <b>Telegram Resilience Status</b>\n"]
+            try:
+                res = getattr(self, "_resilient", None)
+                if res:
+                    stats = res.stats
+                    q = stats.get("queue", {})
+                    conn = "✅ Connected" if stats.get("connected") else "🔴 Disconnected"
+                    lines += [
+                        f"Соединение: {conn}",
+                        f"Очередь: {q.get('queued', 0)} сообщений",
+                        f"Отправлено: {q.get('sent', 0)}",
+                        f"Ошибок: {q.get('failed', 0)}",
+                        f"Dead letters: {q.get('dead_letters', 0)}",
+                    ]
+                else:
+                    lines.append("⚪ ResilientBot не активен")
+            except Exception as e:
+                lines.append(f"❌ Ошибка: {e}")
+
+            # LLM провайдеры
+            lines.append("\n🧠 <b>LLM провайдеры:</b>")
+            try:
+                from brain.llm_router import LLMRouter
+                report = LLMRouter.get().status_report()
+                for prov, info in report.items():
+                    icon = "✅" if info.get("available") else "❌"
+                    lines.append(f"  {icon} {prov}: {info.get('requests', 0)} запросов")
+            except Exception as e:
+                lines.append(f"  ❌ LLMRouter error: {e}")
+
+            await _reply(update, "\n".join(lines))
+
+        # ── /task — запустить задачу через AgentHarness ──────────────────────
+
+        @_check_access(AccessLevel.USER)
+        async def _task_cmd(update: Update, context) -> None:
+            """Запустить автономную задачу: /task <описание задачи>"""
+            task_text = " ".join(context.args) if context.args else ""
+            if not task_text:
+                await _reply(update, "⚡ Использование: /task <описание задачи>\n\nПример:\n/task Найди все TODO в проекте и создай список")
+                return
+            await _typing(update, context)
+            chat_id = update.effective_chat.id
+            try:
+                from agents.task_executor_agent import TaskExecutorAgent, ProgressEvent
+                agent = TaskExecutorAgent.get()
+
+                sent_steps = [0]
+
+                def on_progress(evt: ProgressEvent) -> None:
+                    if evt.is_final:
+                        text = f"✅ <b>Задача [{evt.task_id}] завершена</b>\n\n{evt.observation[:600]}"
+                    elif evt.step_num % 3 == 0:
+                        tool = evt.tool_name or "thinking"
+                        text = f"⚙ <b>[{evt.task_id}] Шаг {evt.step_num}</b>: {tool}\n<code>{evt.observation[:200]}</code>"
+                    else:
+                        return
+                    import asyncio
+                    asyncio.run_coroutine_threadsafe(
+                        context.application.bot.send_message(
+                            chat_id=chat_id, text=text, parse_mode="HTML"
+                        ),
+                        context.application.loop,
+                    )
+
+                task_id = await agent.submit(task_text, on_progress=on_progress)
+                await _reply(update, f"⚡ Задача <code>{task_id}</code> запущена.\nПолучу уведомление по завершении каждых ~3 шагов.")
+            except Exception as e:
+                await _reply(update, f"❌ Ошибка запуска задачи: {e}")
+
+        @_check_access(AccessLevel.USER)
+        async def _tasks_cmd(update: Update, context) -> None:
+            """Показать список задач: /tasks"""
+            try:
+                from agents.task_executor_agent import TaskExecutorAgent
+                tasks = TaskExecutorAgent.get().list_tasks()
+                if not tasks:
+                    await _reply(update, "📋 Задач нет.")
+                    return
+                lines = ["📋 <b>Задачи агента:</b>\n"]
+                icons = {"pending": "⏳", "running": "⚙", "done": "✅", "failed": "❌", "cancelled": "⛔"}
+                for t in tasks[:10]:
+                    icon = icons.get(t["status"], "❓")
+                    lines.append(f"{icon} <code>{t['task_id']}</code> [{t['status']}] {t['elapsed']}\n   {t['task'][:60]}")
+                await _reply(update, "\n".join(lines))
+            except Exception as e:
+                await _reply(update, f"❌ {e}")
+
+        # ── /agents ───────────────────────────────────────────────────────────
+
+        @_check_access(AccessLevel.USER)
+        async def _agents_cmd(update: Update, context) -> None:
+            await _typing(update, context)
+            try:
+                from brain.orchestrator import BrainOrchestrator
+                brain = BrainOrchestrator.get()
+                lines = ["🤖 <b>Агенты системы:</b>\n"]
+                for name, agent in brain._agents.items():
+                    try:
+                        status = agent.get_status() if hasattr(agent, "get_status") else "idle"
+                        info   = agent.info() if hasattr(agent, "info") else None
+                        desc   = info.description[:55] if info else ""
+                        emoji  = {"idle": "🟢", "running": "🔄", "error": "🔴",
+                                  "stopped": "⚫", "waiting": "🟡"}.get(str(status), "❓")
+                        lines.append(f"{emoji} <b>{name}</b> [{status}]\n   <i>{desc}</i>")
+                    except Exception:
+                        lines.append(f"❓ <b>{name}</b> [unknown]")
+                await _reply(update, "\n".join(lines))
+            except Exception as e:
+                log.error("_agents_cmd error: %s", e)
+                await _reply(update, f"❌ Ошибка списка агентов: {e}")
+
+        # ── /balance ──────────────────────────────────────────────────────────
+
+        @_check_access(AccessLevel.USER)
+
+        async def _analysis_cmd(update: Update, context) -> None:
+
+            await _typing(update, context)
+
+            symbol = "BTCUSDT"
+
+            if context.args:
+
+                s = context.args[0].upper()
+
+                symbol = s if s.endswith("USDT") else s + "USDT"
+
+            loop = asyncio.get_running_loop()
+
+            try:
+
+                from brain.orchestrator import BrainOrchestrator
+
+                agent = BrainOrchestrator.get()._agents.get("trading")
+
+                if agent and hasattr(agent, "get_analysis"):
+
+                    text = await asyncio.wait_for(
+
+                        loop.run_in_executor(None, lambda: agent.get_analysis(symbol)),
+
+                        timeout=20.0)
+
+                else:
+
+                    text = "⚠️ Trading agent не подключён."
+
+            except asyncio.TimeoutError:
+
+                text = f"⏱ Анализ {symbol} занял слишком долго."
+
+            except Exception as e:
+
+                text = f"❌ Ошибка: {e}"
+
+            await _reply(update, text)
+
+
+        @_check_access(AccessLevel.USER)
+
+        async def _server_cmd(update: Update, context) -> None:
+
+            await _typing(update, context)
+
+            try:
+
+                from tools.server_monitor import ServerMonitor
+
+                mon = ServerMonitor.get()
+
+                text = mon.get_summary()
+
+                alerts = mon.check_alerts()
+
+                if alerts:
+
+                    text += "\n\n⚠️ Алерты:\n" + "\n".join(alerts)
+
+            except Exception as e:
+
+                text = f"❌ Ошибка: {e}"
+
+            await _reply(update, text)
+
+
+
+        @_check_access(AccessLevel.USER)
+        async def _balance_cmd(update: Update, context) -> None:
+            await _typing(update, context)
+            try:
+                from brain.orchestrator import BrainOrchestrator
+                brain = BrainOrchestrator.get()
+                agent = brain._agents.get("trading")
+                text  = agent.get_balance() if agent and hasattr(agent, "get_balance") \
+                        else "⚠️ Торговый агент не подключён."
+            except Exception as e:
+                log.error("_balance_cmd error: %s", e)
+                text = f"❌ Ошибка получения баланса: {e}"
+            await _reply(update, text)
+
+        # ── /positions ────────────────────────────────────────────────────────
+
+        @_check_access(AccessLevel.USER)
+        async def _positions_cmd(update: Update, context) -> None:
+            await _typing(update, context)
+            try:
+                from brain.orchestrator import BrainOrchestrator
+                brain = BrainOrchestrator.get()
+                agent = brain._agents.get("trading")
+                text  = agent.get_positions() if agent and hasattr(agent, "get_positions") \
+                        else "⚠️ Торговый агент не подключён."
+            except Exception as e:
+                log.error("_positions_cmd error: %s", e)
+                text = f"❌ Ошибка получения позиций: {e}"
+            await _reply(update, text)
+
+        # ── /trading — полный дашборд ─────────────────────────────────────────
+
+        @_check_access(AccessLevel.USER)
+        async def _trading_cmd(update: Update, context) -> None:
+            await _typing(update, context)
+            try:
+                from core.trading_bridge import TradingBridge
+                bridge = TradingBridge.get()
+                bot    = bridge.get_status(force=True)
+
+                lines = [
+                    f"📊 <b>Торговый бот — Дашборд</b>",
+                    f"{'🟢' if bot.online else '🔴'} {bot.mode_label}",
+                    "",
+                ]
+                if bot.online:
+                    pnl_sign = "+" if bot.daily_pnl >= 0 else ""
+                    lines += [
+                        f"💰 <b>Баланс:</b> {bot.balance_usdt:.2f} USDT",
+                        f"📈 <b>Daily PnL:</b> {pnl_sign}{bot.daily_pnl:.2f} USDT "
+                        f"({pnl_sign}{bot.daily_pnl_pct:.2f}%)",
+                        f"📂 <b>Открытых позиций:</b> {bot.open_positions}",
+                        "",
+                        f"🔁 <b>Сделок сегодня:</b> {bot.trades_today}",
+                        f"✅ Побед: {bot.winning_trades}  ❌ Потерь: {bot.losing_trades}"
+                        f"  📊 WinRate: {bot.win_rate*100:.1f}%",
+                    ]
+                    if bot.active_pairs:
+                        lines.append(f"\n🎯 <b>Пары:</b> {', '.join(bot.active_pairs[:8])}")
+                    if bot.active_strategies:
+                        lines.append(f"🧠 <b>Стратегии:</b> {', '.join(bot.active_strategies)}")
+                    if bot.recent_trades:
+                        lines.append("\n<b>Последние 5 сделок:</b>")
+                        for t in bot.recent_trades[:5]:
+                            side_e = "🟢" if t.side.lower() == "buy" else "🔴"
+                            lat = f" {t.latency_ms:.0f}ms" if t.latency_ms else ""
+                            lines.append(
+                                f"  {side_e} {t.symbol} {t.side} "
+                                f"qty={t.qty} [{t.status}]{lat} @{t.submitted_dt}"
+                            )
+                else:
+                    lines.append("⚠️ Бот оффлайн или не запущен")
+                    lines.append(f"Health URL: {bridge._health_url}")
+                await _reply(update, "\n".join(lines))
+            except Exception as e:
+                await _reply(update, f"❌ Trading bridge error: {e}")
+
+        # ── /pnl ──────────────────────────────────────────────────────────────
+
+        @_check_access(AccessLevel.USER)
+        async def _pnl_cmd(update: Update, context) -> None:
+            await _typing(update, context)
+            try:
+                from core.trading_bridge import TradingBridge
+                bot = TradingBridge.get().get_status()
+                if bot.online:
+                    sign = "+" if bot.daily_pnl >= 0 else ""
+                    emoji = "📈" if bot.daily_pnl >= 0 else "📉"
+                    await _reply(update,
+                        f"{emoji} <b>P&L за сегодня</b>\n\n"
+                        f"Изменение: <b>{sign}{bot.daily_pnl:.2f} USDT "
+                        f"({sign}{bot.daily_pnl_pct:.2f}%)</b>\n"
+                        f"Сделок: {bot.trades_today} "
+                        f"(Win: {bot.winning_trades} / Loss: {bot.losing_trades})\n"
+                        f"Win rate: {bot.win_rate*100:.1f}%"
+                    )
+                else:
+                    await _reply(update, "🔴 Торговый бот оффлайн")
+            except Exception as e:
+                await _reply(update, f"❌ {e}")
+
+        # ── /bot start|stop|status ────────────────────────────────────────────
+
+        @_check_access(AccessLevel.ADMIN)
+        async def _bot_cmd(update: Update, context) -> None:
+            await _typing(update, context)
+            try:
+                cmd_arg = (context.args[0] if context.args else "status").lower()
+                from brain.orchestrator import BrainOrchestrator
+                brain = BrainOrchestrator.get()
+                agent = brain._agents.get("trading")
+                if not agent:
+                    await _reply(update, "⚠️ TradingAgent не подключён.")
+                    return
+                if cmd_arg in ("start", "запусти"):
+                    result = agent.start_bot() if hasattr(agent, "start_bot") \
+                             else "⚠️ Метод start_bot не найден."
+                elif cmd_arg in ("stop", "останови"):
+                    result = agent.stop_bot() if hasattr(agent, "stop_bot") \
+                             else "⚠️ Метод stop_bot не найден."
+                else:
+                    result = agent.get_status()
+                await _reply(update, result)
+            except Exception as e:
+                log.error("_bot_cmd error: %s", e)
+                await _reply(update, f"❌ Ошибка управления ботом: {e}")
+
+        # ── /ask ──────────────────────────────────────────────────────────────
+
+        @_check_access(AccessLevel.USER)
+        async def _ask_cmd(update: Update, context) -> None:
+            query = " ".join(context.args) if context.args else ""
+            if not query:
+                await update.message.reply_text(
+                    "Использование: <code>/ask твой вопрос</code>",
+                    parse_mode=ParseMode.HTML
+                )
+                return
+            await _typing(update, context)
+            await _process_message(update, context, query)
+
+        # ── /math ─────────────────────────────────────────────────────────────
+
+        @_check_access(AccessLevel.USER)
+        async def _math_cmd(update: Update, context) -> None:
+            expr = " ".join(context.args) if context.args else ""
+            if not expr:
+                await update.message.reply_text(
+                    "Использование: <code>/math 2+2</code> или <code>/math sin(pi/2)</code>",
+                    parse_mode=ParseMode.HTML
+                )
+                return
+            await _typing(update, context)
+            try:
+                from brain.orchestrator import BrainOrchestrator, OrchestratorRequest
+                req = OrchestratorRequest(
+                    text=f"посчитай {expr}", source="telegram",
+                    session_id=str(update.effective_user.id),
+                )
+                loop = asyncio.get_running_loop()
+                resp = await asyncio.wait_for(
+                    loop.run_in_executor(None, BrainOrchestrator.get().process, req),
+                    timeout=60
+                )
+                await _reply(update, resp.text)
+            except asyncio.TimeoutError:
+                await _reply(update, "⏳ Вычисление заняло >60с.")
+            except Exception as e:
+                log.error("_math_cmd error: %s", e)
+                await _reply(update, f"❌ Ошибка вычисления: {e}")
+
+        # ── /news ─────────────────────────────────────────────────────────────
+
+        @_check_access(AccessLevel.USER)
+        async def _news_cmd(update: Update, context) -> None:
+            await _typing(update, context)
+            query = " ".join(context.args) if context.args else "crypto AI tech"
+            try:
+                from brain.orchestrator import BrainOrchestrator, OrchestratorRequest
+                req = OrchestratorRequest(
+                    text=f"новости {query}", source="telegram",
+                    session_id=str(update.effective_user.id),
+                )
+                loop = asyncio.get_running_loop()
+                resp = await asyncio.wait_for(
+                    loop.run_in_executor(None, BrainOrchestrator.get().process, req),
+                    timeout=60
+                )
+                await _reply(update, resp.text)
+            except asyncio.TimeoutError:
+                await _reply(update, "⏳ Поиск новостей занял >60с.")
+            except Exception as e:
+                log.error("_news_cmd error: %s", e)
+                await _reply(update, f"❌ Ошибка новостей: {e}")
+
+        # ── /plan ─────────────────────────────────────────────────────────────
+
+        @_check_access(AccessLevel.USER)
+        async def _plan_cmd(update: Update, context) -> None:
+            task = " ".join(context.args) if context.args else ""
+            if not task:
+                await update.message.reply_text(
+                    "Использование: <code>/plan создай Python скрипт для анализа цен</code>",
+                    parse_mode=ParseMode.HTML
+                )
+                return
+            await _typing(update, context)
+            await update.message.reply_text(
+                f"📋 Выполняю: <b>{task[:80]}</b>\nМожет занять до 2 минут...",
+                parse_mode=ParseMode.HTML
+            )
+            try:
+                from brain.orchestrator import BrainOrchestrator, OrchestratorRequest
+                req = OrchestratorRequest(
+                    text=task, source="telegram",
+                    session_id=str(update.effective_user.id),
+                )
+                loop = asyncio.get_running_loop()
+                resp = await asyncio.wait_for(
+                    loop.run_in_executor(None, BrainOrchestrator.get().process, req),
+                    timeout=90
+                )
+                await _reply(update, resp.text)
+            except asyncio.TimeoutError:
+                await _reply(update, "⏳ Планирование заняло >90с — задача сложная.")
+            except Exception as e:
+                log.error("_plan_cmd error: %s", e)
+                await _reply(update, f"❌ Ошибка планирования: {e}")
+
+        # ── /keys ─────────────────────────────────────────────────────────────
+
+        @_check_access(AccessLevel.ADMIN)
+        async def _keys_cmd(update: Update, context) -> None:
+            await _typing(update, context)
+            from brain.orchestrator import BrainOrchestrator
+            brain = BrainOrchestrator.get()
+            km    = brain._agents.get("key_manager")
+            if km and hasattr(km, "validate_all_keys"):
+                try:
+                    statuses = km.validate_all_keys()
+                    lines = ["🔑 <b>API Ключи:</b>\n"]
+                    for s in statuses:
+                        if not s.key_value:
+                            emoji, note = "⬜", "не задан"
+                        elif s.valid:
+                            emoji, note = "✅", "OK"
+                        else:
+                            emoji, note = "❌", (s.error[:40] if s.error else "невалиден")
+                        lines.append(f"{emoji} <code>{s.provider}</code>: {note}")
+                    text = "\n".join(lines)
+                except Exception as e:
+                    text = f"❌ Ошибка проверки ключей: {e}"
+            else:
+                # Fallback: показать что настроено
+                lines = ["🔑 <b>Настроенные API ключи:</b>\n"]
+                checks = [
+                    ("Claude (Anthropic)", bool(cfg.claude_api_key)),
+                    ("OpenAI",             bool(cfg.openai_api_key)),
+                    ("DeepSeek",           bool(cfg.deepseek_api_key)),
+                    ("Groq",               bool(cfg.groq_api_key)),
+                    ("Gemini",             bool(cfg.gemini_api_key)),
+                    ("Grok (xAI)",         bool(cfg.grok_api_key)),
+                    ("Bybit",              bool(cfg.bybit_api_key)),
+                    ("Telegram",           bool(cfg.telegram_token)),
+                ]
+                for name, ok in checks:
+                    lines.append(f"{'✅' if ok else '⬜'} {name}")
+                text = "\n".join(lines)
+            await _reply(update, text)
+
+        # ── /learn ────────────────────────────────────────────────────────────
+
+        @_check_access(AccessLevel.ADMIN)
+        async def _learn_cmd(update: Update, context) -> None:
+            await _typing(update, context)
+            from brain.orchestrator import BrainOrchestrator
+            brain   = BrainOrchestrator.get()
+            trainer = brain._agents.get("self_training")
+            if trainer and hasattr(trainer, "_run_training_cycle"):
+                try:
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        report = pool.submit(trainer._run_training_cycle).result(timeout=120)
+                    text = (
+                        f"✅ <b>Обучение завершено</b>\n"
+                        f"Изучено паттернов: {report.learned}\n"
+                        f"Оптимизировано: {report.optimized}\n"
+                        f"Улучшений: {len(report.improvements)}\n"
+                    )
+                    if report.improvements:
+                        text += "\n<b>Улучшения:</b>\n" + "\n".join(
+                            f"  • {imp}" for imp in report.improvements[:5]
+                        )
+                except concurrent.futures.TimeoutError:
+                    text = "⏳ Обучение выполняется (>120с) — результат придёт позже."
+                except Exception as e:
+                    text = f"❌ Ошибка обучения: {e}"
+            else:
+                text = "⚠️ SelfTrainingAgent недоступен."
+            await _reply(update, text)
+
+        # ── /freelance — поиск работы и фриланс ──────────────────────────────
+
+        @_check_access(AccessLevel.USER)
+        async def _freelance_cmd(update: Update, context) -> None:
+            """
+            /freelance             — показать статистику и последние вакансии
+            /freelance search py   — найти работу по Python
+            /freelance proposal    — написать proposal для последней вакансии
+            /freelance estimate <desc> — оценить стоимость задачи
+            /freelance earnings    — статистика заработка
+            """
+            args = context.args or []
+            sub = args[0].lower() if args else "status"
+            rest = " ".join(args[1:]) if len(args) > 1 else ""
+
+            await _typing(update, context)
+            try:
+                from agents.freelance_agent import FreelanceAgent
+                fa = FreelanceAgent.get()
+
+                if sub in ("search", "find", "найди"):
+                    skills = rest.split() if rest else None
+                    jobs = fa.search_jobs(skills=skills)
+                    if not jobs:
+                        await _reply(update, "🔍 Вакансии не найдены. Попробуй позже.")
+                        return
+                    lines = [f"🔍 <b>Найдено {len(jobs)} вакансий:</b>\n"]
+                    for i, j in enumerate(jobs[:6], 1):
+                        budget = f"${j.budget_min:.0f}-${j.budget_max:.0f}" if j.budget_max else "?"
+                        lines.append(
+                            f"{i}. <b>{j.title[:50]}</b> [{j.platform}]\n"
+                            f"   {budget} | match: {j.match_score:.0%}\n"
+                            + (f"   {j.url}\n" if j.url else "")
+                        )
+                    await _reply(update, "\n".join(lines))
+
+                elif sub in ("proposal", "заявка"):
+                    from concurrent.futures import ThreadPoolExecutor
+                    with ThreadPoolExecutor(max_workers=1) as pool:
+                        jobs_saved = fa._db.get_jobs(limit=1)
+                    if not jobs_saved:
+                        await _reply(update, "⚠️ Нет сохранённых вакансий. Выполни /freelance search сначала.")
+                        return
+                    with ThreadPoolExecutor(max_workers=1) as pool:
+                        proposal = pool.submit(fa.generate_proposal, jobs_saved[0]).result(timeout=60)
+                    text = (
+                        f"📝 <b>Proposal для: {proposal.job_title[:40]}</b>\n"
+                        f"Ставка: ${proposal.bid_amount} ({proposal.bid_type})\n\n"
+                        f"<pre>{proposal.text[:3000]}</pre>"
+                    )
+                    await _reply(update, text)
+
+                elif sub in ("estimate", "оцени", "стоимость"):
+                    if not rest:
+                        await _reply(update, "Использование: /freelance estimate <описание задачи>")
+                        return
+                    from concurrent.futures import ThreadPoolExecutor
+                    with ThreadPoolExecutor(max_workers=1) as pool:
+                        est = pool.submit(fa.estimate_project, rest).result(timeout=45)
+                    text = (
+                        f"📊 <b>Оценка:</b> {rest[:50]}\n\n"
+                        f"⏱ {est.hours_min:.0f}–{est.hours_max:.0f} часов\n"
+                        f"💵 ${est.price_min:.0f}–${est.price_max:.0f}\n"
+                        f"📅 Срок: {est.delivery_days} дней\n"
+                    )
+                    if est.breakdown:
+                        text += "\n<b>Разбивка:</b>\n" + "\n".join(f"• {b}" for b in est.breakdown[:5])
+                    await _reply(update, text)
+
+                elif sub in ("earnings", "заработок", "доход"):
+                    summary = fa.track_earnings()
+                    text = (
+                        f"💰 <b>Статистика заработка:</b>\n"
+                        f"Всего: <b>${summary['total_usd']:.2f}</b>\n"
+                    )
+                    if summary.get("by_platform"):
+                        text += "\nПо платформам:\n" + "\n".join(
+                            f"  • {p}: ${a:.2f}" for p, a in summary["by_platform"].items()
+                        )
+                    await _reply(update, text)
+
+                else:
+                    # Статус по умолчанию
+                    proposals = fa._db.get_proposals()
+                    jobs = fa._db.get_jobs(limit=5)
+                    earnings = fa.track_earnings()
+                    text = (
+                        f"💼 <b>FreelanceAgent Status</b>\n\n"
+                        f"📋 Заявок всего: {len(proposals)}\n"
+                        f"✅ Выигранных: {len([p for p in proposals if p.status == 'won'])}\n"
+                        f"💰 Заработано: ${earnings['total_usd']:.2f}\n"
+                        f"🔍 Вакансий в базе: {len(jobs)}\n\n"
+                        f"<b>Команды:</b>\n"
+                        f"/freelance search <навык>\n"
+                        f"/freelance proposal\n"
+                        f"/freelance estimate <задача>\n"
+                        f"/freelance earnings"
+                    )
+                    await _reply(update, text)
+            except Exception as e:
+                await _reply(update, f"❌ FreelanceAgent ошибка: {e}")
+
+        # ── /pay — платёжные системы ─────────────────────────────────────────
+
+        @_check_access(AccessLevel.USER)
+        async def _pay_cmd(update: Update, context) -> None:
+            """
+            /pay stripe fastapi   — интеграция Stripe + FastAPI
+            /pay paypal flask     — интеграция PayPal + Flask
+            /pay crypto           — crypto payment (USDT)
+            /pay invoice <desc>   — выставить счёт
+            /pay earnings         — отчёт по доходам
+            """
+            args = context.args or []
+            sub = args[0].lower() if args else "help"
+            rest = " ".join(args[1:]) if len(args) > 1 else ""
+
+            await _typing(update, context)
+            try:
+                from agents.payment_agent import PaymentAgent
+                pa = PaymentAgent.get()
+
+                if sub in ("stripe", "paypal", "crypto", "юkassa", "liqpay", "binance"):
+                    lang = rest or "python"
+                    from concurrent.futures import ThreadPoolExecutor
+                    with ThreadPoolExecutor(max_workers=1) as pool:
+                        code = pool.submit(pa.generate_payment_integration, sub, lang).result(timeout=60)
+                    # Telegram limit — разбиваем
+                    await _reply(update, f"💳 <b>Интеграция {sub.upper()} + {lang}</b>\n\n{code[:3800]}")
+
+                elif sub in ("invoice", "счёт", "выставь"):
+                    if not rest:
+                        await _reply(update, "Использование: /pay invoice Клиент client@email.com 500 Разработка API")
+                        return
+                    from concurrent.futures import ThreadPoolExecutor
+                    with ThreadPoolExecutor(max_workers=1) as pool:
+                        result = pool.submit(pa._cmd_invoice, rest).result(timeout=45)
+                    await _reply(update, result)
+
+                elif sub in ("earnings", "доход", "отчёт"):
+                    await _reply(update, pa._cmd_earnings())
+
+                elif sub in ("webhook", "вебхук"):
+                    from concurrent.futures import ThreadPoolExecutor
+                    with ThreadPoolExecutor(max_workers=1) as pool:
+                        result = pool.submit(pa._explain_webhook, rest or "stripe webhook").result(timeout=45)
+                    await _reply(update, result[:3800])
+
+                elif sub in ("pci", "3ds", "security"):
+                    await _reply(update, pa._explain_pci()[:3800])
+
+                else:
+                    await _reply(update,
+                        "💳 <b>PaymentAgent — команды:</b>\n\n"
+                        "/pay stripe fastapi — Stripe + FastAPI интеграция\n"
+                        "/pay paypal flask — PayPal + Flask интеграция\n"
+                        "/pay crypto — USDT/BTC crypto payments\n"
+                        "/pay invoice Имя email@x.com 500 Описание\n"
+                        "/pay earnings — статистика доходов\n"
+                        "/pay webhook stripe — объяснить webhook setup\n"
+                        "/pay pci — PCI DSS compliance guide"
+                    )
+            except Exception as e:
+                await _reply(update, f"❌ PaymentAgent ошибка: {e}")
+
+        # ── /cot, /episodic, /queue, /tools ──────────────────────────────────
+
+        @_check_access(AccessLevel.USER)
+        async def _cot_cmd(update: Update, context) -> None:
+            await _typing(update, context)
+            try:
+                from brain.chain_of_thought import ChainOfThoughtEngine
+                loop = asyncio.get_running_loop()
+                report = await loop.run_in_executor(
+                    None, ChainOfThoughtEngine.get().get_report
+                )
+                await _reply(update, report or "CoT: нет данных")
+            except Exception as e:
+                log.error("_cot_cmd error: %s", e)
+                await _reply(update, f"⚠️ CoT недоступен: {e}")
+
+        @_check_access(AccessLevel.USER)
+        async def _episodic_cmd(update: Update, context) -> None:
+            await _typing(update, context)
+            try:
+                from memory.episodic_memory import EpisodicMemory
+                loop = asyncio.get_running_loop()
+                report = await loop.run_in_executor(
+                    None, EpisodicMemory.get().get_report
+                )
+                await _reply(update, report or "Episodic: нет данных")
+            except Exception as e:
+                log.error("_episodic_cmd error: %s", e)
+                await _reply(update, f"⚠️ Episodic Memory недоступна: {e}")
+
+        @_check_access(AccessLevel.USER)
+        async def _queue_cmd(update: Update, context) -> None:
+            await _typing(update, context)
+            try:
+                from core.task_queue import TaskQueue
+                tq   = TaskQueue.get()
+                loop = asyncio.get_running_loop()
+                text = await loop.run_in_executor(None, tq.get_report)
+                tasks = tq.list_tasks(limit=5)
+                if tasks:
+                    text += "\n\n<b>Последние задачи:</b>\n"
+                    icons = {"done": "✅", "failed": "❌", "running": "🔄",
+                             "pending": "⏳", "cancelled": "🚫"}
+                    for t in tasks:
+                        icon = icons.get(t["status"], "•")
+                        text += f"  {icon} [{t['tool_name']}] {t['query'][:40]}\n"
+                await _reply(update, text)
+            except Exception as e:
+                log.error("_queue_cmd error: %s", e)
+                await _reply(update, f"⚠️ Очередь задач: {e}")
+
+        @_check_access(AccessLevel.USER)
+        async def _tools_cmd(update: Update, context) -> None:
+            await _typing(update, context)
+            try:
+                from core.tool_registry import ToolRegistry
+                reg   = ToolRegistry.get()
+                tools = reg.list_tools()
+                enabled  = [t for t in tools if t.get("enabled")]
+                disabled = [t for t in tools if not t.get("enabled")]
+                lines = [f"🛠 <b>Инструменты: {len(enabled)} активных / {len(tools)} всего</b>\n"]
+                for t in enabled[:15]:
+                    lines.append(
+                        f"✅ <b>{t['name']}</b> [{t.get('category','?')}]\n"
+                        f"   <i>{t.get('description','')[:55]}</i>"
+                    )
+                if disabled:
+                    lines.append(f"\n❌ Отключено: {', '.join(t['name'] for t in disabled[:5])}")
+                await _reply(update, "\n".join(lines))
+            except Exception as e:
+                log.error("_tools_cmd error: %s", e)
+                await _reply(update, f"⚠️ Инструменты: {e}")
+
+        # ── /backup (ADMIN+) ─────────────────────────────────────────────────
+
+        @_check_access(AccessLevel.ADMIN)
+        async def _backup_cmd(update: Update, context) -> None:
+            """
+            /backup           — создать резервную копию прямо сейчас
+            /backup list      — показать последние 5 бэкапов
+            /backup restore   — инструкция по восстановлению
+            """
+            args = context.args or []
+            sub = args[0].lower() if args else "create"
+
+            if sub == "list":
+                try:
+                    from pathlib import Path as _P
+                    backup_dir = _P(__file__).parent.parent / "backups"
+                    archives = sorted(
+                        backup_dir.glob("personal_ai_backup_*.tar.gz"),
+                        key=lambda p: p.stat().st_mtime, reverse=True
+                    ) if backup_dir.exists() else []
+                    if not archives:
+                        await _reply(update, "📦 Бэкапов нет. Запусти /backup для создания.")
+                        return
+                    lines = [f"📦 <b>Последние бэкапы ({len(archives)}):</b>\n"]
+                    import datetime as _dt
+                    for a in archives[:5]:
+                        size_mb = a.stat().st_size / 1_048_576
+                        ts = _dt.datetime.fromtimestamp(a.stat().st_mtime).strftime("%d.%m.%Y %H:%M")
+                        lines.append(f"  • <code>{a.name}</code>\n    📅 {ts} | 📦 {size_mb:.1f} MB")
+                    await _reply(update, "\n".join(lines))
+                except Exception as e:
+                    await _reply(update, f"❌ Ошибка: {e}")
+                return
+
+            if sub == "restore":
+                await _reply(update,
+                    "📖 <b>Восстановление из бэкапа</b>\n\n"
+                    "1. Найди нужный архив в папке <code>backups/</code>\n"
+                    "2. Запусти:\n"
+                    "<pre>python scripts/restore.py backups/personal_ai_backup_YYYYMMDD_HHMMSS.tar.gz</pre>\n"
+                    "3. Перезапусти бота:\n"
+                    "<pre>python main.py --no-gui</pre>\n\n"
+                    "⚠️ Restore перезапишет данные! Сделай бэкап текущего состояния перед восстановлением."
+                )
+                return
+
+            # create (по умолчанию)
+            await _reply(update, "⏳ Создаю резервную копию...")
+            await _typing(update, context)
+            import asyncio as _aio
+            import concurrent.futures as _cf
+
+            def _do_backup():
+                from scripts.backup import create_backup
+                return create_backup()
+
+            try:
+                loop = _aio.get_running_loop()
+                with _cf.ThreadPoolExecutor(max_workers=1) as pool:
+                    archive = await loop.run_in_executor(pool, _do_backup)
+                size_mb = archive.stat().st_size / 1_048_576
+                await _reply(update,
+                    f"✅ <b>Бэкап создан!</b>\n\n"
+                    f"📦 Файл: <code>{archive.name}</code>\n"
+                    f"📏 Размер: <b>{size_mb:.1f} MB</b>\n"
+                    f"📁 Папка: <code>backups/</code>\n\n"
+                    f"Используй /backup list для просмотра всех бэкапов."
+                )
+            except Exception as e:
+                await _reply(update, f"❌ Ошибка создания бэкапа: {e}")
+
+        # ── /invite (OWNER only) ──────────────────────────────────────────────
+
+        @_check_access(AccessLevel.OWNER)
+        async def _invite_cmd(update: Update, context) -> None:
+            uid = update.effective_user.id
+
+            # Парсим TTL из аргументов: /invite 48 → 48 часов
+            ttl_hours = 24
+            label = ""
+            if context.args:
+                try:
+                    ttl_hours = int(context.args[0])
+                    label = " ".join(context.args[1:])
+                except ValueError:
+                    label = " ".join(context.args)
+
+            ttl_sec = ttl_hours * 3600
+            token   = self._db.create_invite(uid, ttl_sec=ttl_sec, label=label)
+
+            # Получить username бота для deep link
+            bot_me = await context.bot.get_me()
+            bot_name = bot_me.username
+            deep_link = f"https://t.me/{bot_name}?start=INVITE_{token}"
+
+            import datetime
+            expires_dt = datetime.datetime.fromtimestamp(time.time() + ttl_sec)
+
+            await _reply(update,
+                f"🔗 <b>Инвайт-ссылка создана</b>\n\n"
+                f"Ссылка:\n<code>{deep_link}</code>\n\n"
+                f"Токен: <code>{token}</code>\n"
+                f"Действует: <b>{ttl_hours} часов</b>\n"
+                f"Истекает: {expires_dt.strftime('%d.%m.%Y %H:%M')}\n"
+                f"Одноразовая: ✅\n\n"
+                f"Отправь эту ссылку человеку, которому хочешь дать доступ."
+            )
+
+        # ── /users (OWNER only) ───────────────────────────────────────────────
+
+        @_check_access(AccessLevel.OWNER)
+        async def _users_cmd(update: Update, context) -> None:
+            users = self._db.list_users()
+            if not users:
+                await _reply(update, "📭 Нет авторизованных пользователей.")
+                return
+            lines = [f"👥 <b>Авторизованные пользователи ({len(users)}):</b>\n"]
+            level_emoji = {
+                AccessLevel.OWNER:   "👑",
+                AccessLevel.ADMIN:   "⭐",
+                AccessLevel.USER:    "👤",
+                AccessLevel.BLOCKED: "🚫",
+            }
+            import datetime
+            for u in users:
+                le   = level_emoji.get(u.access, "?")
+                name = u.full_name or u.username or "—"
+                last = datetime.datetime.fromtimestamp(u.last_seen).strftime("%d.%m %H:%M") \
+                       if u.last_seen else "—"
+                lines.append(
+                    f"{le} <b>{name}</b> "
+                    f"[<code>{u.user_id}</code>]\n"
+                    f"   @{u.username or '—'}  |  msgs: {u.message_count}  |  last: {last}"
+                )
+
+            # Активные инвайты
+            invites = self._db.list_invites(active_only=True)
+            if invites:
+                lines.append(f"\n🔗 <b>Активных инвайтов: {len(invites)}</b>")
+                for inv in invites[:5]:
+                    import datetime as dt
+                    exp = dt.datetime.fromtimestamp(inv["expires_at"]).strftime("%d.%m %H:%M")
+                    lines.append(
+                        f"  <code>{inv['token']}</code> — истекает {exp}"
+                        + (f" | {inv['label']}" if inv.get("label") else "")
+                    )
+            await _reply(update, "\n".join(lines))
+
+        # ── /revoke (OWNER only) ──────────────────────────────────────────────
+
+        @_check_access(AccessLevel.OWNER)
+        async def _revoke_cmd(update: Update, context) -> None:
+            if not context.args:
+                await update.message.reply_text(
+                    "Использование: <code>/revoke &lt;user_id&gt;</code>",
+                    parse_mode=ParseMode.HTML
+                )
+                return
+            try:
+                target_id = int(context.args[0])
+            except ValueError:
+                await _reply(update, "❌ Неверный user_id.")
+                return
+            if target_id == self._owner_id:
+                await _reply(update, "❌ Нельзя отозвать доступ у владельца.")
+                return
+            ok = self._db.set_access(target_id, AccessLevel.BLOCKED)
+            if ok:
+                await _reply(update,
+                    f"✅ Доступ пользователя <code>{target_id}</code> заблокирован."
+                )
+                # Уведомить заблокированного
+                try:
+                    await context.bot.send_message(
+                        chat_id=target_id,
+                        text="🚫 Твой доступ к боту был отозван администратором.",
+                        parse_mode=ParseMode.HTML
+                    )
+                except Exception:
+                    pass
+            else:
+                await _reply(update, f"⚠️ Пользователь <code>{target_id}</code> не найден.")
+
+        # ── /promote (OWNER only) ─────────────────────────────────────────────
+
+        @_check_access(AccessLevel.OWNER)
+        async def _promote_cmd(update: Update, context) -> None:
+            if len(context.args) < 2:
+                await update.message.reply_text(
+                    "Использование: <code>/promote &lt;user_id&gt; admin|user</code>",
+                    parse_mode=ParseMode.HTML
+                )
+                return
+            try:
+                target_id = int(context.args[0])
+            except ValueError:
+                await _reply(update, "❌ Неверный user_id.")
+                return
+            role = context.args[1].lower()
+            level_map = {"admin": AccessLevel.ADMIN, "user": AccessLevel.USER,
+                         "block": AccessLevel.BLOCKED}
+            if role not in level_map:
+                await _reply(update, "❌ Роль должна быть: admin | user | block")
+                return
+            new_level = level_map[role]
+            ok = self._db.set_access(target_id, new_level)
+            if ok:
+                await _reply(update,
+                    f"✅ Пользователь <code>{target_id}</code> → <b>{new_level.name}</b>"
+                )
+            else:
+                await _reply(update, f"⚠️ Пользователь <code>{target_id}</code> не найден в БД.")
+
+        # ── Обработка обычных сообщений ───────────────────────────────────────
+
+
+
+        # ── /memory — статистика памяти ──────────────────────────────────────
+        @_check_access(AccessLevel.USER)
+        async def _memory_cmd(update: Update, context) -> None:
+            """Показать статистику памяти и знаний."""
+            await _typing(update, context)
+            try:
+                from memory.memory_store import MemoryStore
+                from memory.episodic_memory import EpisodicMemory
+                ms   = MemoryStore.get()
+                loop = asyncio.get_running_loop()
+
+                def _get_stats():
+                    knowledge = ms.get_knowledge(category=None, limit=500)
+                    messages  = ms.get_messages(limit=5)
+                    ep_stats  = EpisodicMemory.get().get_stats()
+                    return knowledge, messages, ep_stats
+
+                knowledge, messages, ep_stats = await loop.run_in_executor(None, _get_stats)
+
+                # Группируем по категориям
+                cats = {}
+                for k in knowledge:
+                    cats[k.category] = cats.get(k.category, 0) + 1
+
+                lines = [
+                    "🧠 <b>Память APEX AI</b>\n",
+                    f"📚 Знаний: <b>{len(knowledge)}</b>",
+                ]
+                for cat, cnt in sorted(cats.items(), key=lambda x: -x[1])[:6]:
+                    lines.append(f"   • {cat}: {cnt}")
+                lines += [
+                    f"\n💬 Сообщений в истории: <b>{ep_stats.get('total_episodes', 0)}</b>",
+                    f"🔄 Сессий: {ep_stats.get('unique_sessions', 0)}",
+                    f"📊 Ср. важность: {ep_stats.get('avg_importance', 0):.2f}",
+                    f"\n/episodic — детальный отчёт",
+                    f"/cot — Chain-of-Thought отчёт",
+                ]
+                await _reply(update, "\n".join(lines))
+            except Exception as e:
+                log.error("_memory_cmd error: %s", e)
+                await _reply(update, f"❌ Память: {e}")
+
+        async def _on_message(update: Update, context) -> None:
+            if not update.message or not update.message.text:
+                return
+            user = update.effective_user
+            uid  = user.id
+
+            # Проверка доступа
+            if not self._is_authorized(uid):
+                await update.message.reply_text(
+                    _access_denied_text(uid), parse_mode=ParseMode.HTML
+                )
+                return
+
+            text = update.message.text.strip()
+            if not text:
+                return
+            self._db.bump_seen(uid)
+
+            # Сохранить в память
+            try:
+                self._memory.add_message(Message(
+                    role="user", content=text,
+                    source="telegram", session_id=str(uid)
+                ))
+            except Exception:
+                pass
+
+            log.info("MSG uid=%d @%s: %s",
+                     uid, getattr(user, "username", "?") or "?", text[:100])
+            await _typing(update, context)
+            await _process_message(update, context, text)
+
+        async def _process_message(update: Update, context,
+                                    text: str) -> None:
+            """Обработать текст через мозг и ответить."""
+            uid = update.effective_user.id
+            if self._brain_callback:
+                try:
+                    from brain.orchestrator import OrchestratorRequest
+                    req = OrchestratorRequest(
+                        text=text, source="telegram",
+                        session_id=str(uid), user_id=str(uid),
+                    )
+                    loop = asyncio.get_running_loop()
+                    response = await asyncio.wait_for(
+                        loop.run_in_executor(None, self._brain_callback, req),
+                        timeout=120
+                    )
+                    reply_text = response.text if response else "Нет ответа"
+                except asyncio.TimeoutError:
+                    reply_text = (
+                        "⏳ Обработка заняла >120с. "
+                        "Попробуй упростить вопрос или напиши ещё раз."
+                    )
+                    log.warning("Brain timeout uid=%d text=%r", uid, text[:60])
+                except Exception as e:
+                    log.error("Brain error uid=%d: %s", uid, e, exc_info=True)
+                    reply_text = f"❌ Ошибка: {type(e).__name__}: {str(e)[:200]}"
+            else:
+                reply_text = "⚠️ Мозг не подключён. Перезапусти сервис."
+
+            await _reply(update, reply_text)
+
+            try:
+                self._memory.add_message(Message(
+                    role="assistant", content=reply_text,
+                    source="telegram", session_id=str(uid)
+                ))
+            except Exception:
+                pass
+
+        # ── Сборка приложения ─────────────────────────────────────────────────
+
+        async def _run_async() -> None:
+            # ── SSL fix для Windows (антивирус/корп-прокси перехватывают TLS) ─
+            # Стратегия (в порядке приоритета):
+            #   1. Windows cert store (load_default_certs) — корп. CA уже там
+            #   2. verify=False — если и Windows store не помогает
+            #   3. Дефолт — для Linux/Mac где нет этой проблемы
+            import ssl as _ssl
+            import httpx as _httpx
+
+            def _make_ssl_context() -> "_ssl.SSLContext | bool":
+                """Вернуть SSL контекст или False (verify=False) или True (default)."""
+                # Попытка 1: certifi (стандартный пакет с CA)
+                try:
+                    import certifi
+                    _httpx.get("https://api.telegram.org", timeout=3,
+                               verify=certifi.where())
+                    log.debug("SSL: certifi OK")
+                    return certifi.where()     # строка-путь, httpx принимает это
+                except Exception:
+                    pass
+
+                # Попытка 2: Windows системное хранилище сертификатов
+                try:
+                    win_ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_CLIENT)
+                    win_ctx.load_default_certs()   # Windows cert store (есть корп. CA)
+                    win_ctx.check_hostname = True
+                    win_ctx.verify_mode    = _ssl.CERT_REQUIRED
+                    _httpx.get("https://api.telegram.org", timeout=3,
+                               verify=win_ctx)
+                    log.info("SSL: using Windows system cert store")
+                    return win_ctx
+                except Exception:
+                    pass
+
+                # Попытка 3: verify=False (последний резерв)
+                try:
+                    import urllib3
+                    urllib3.disable_warnings()
+                except Exception:
+                    pass
+                _ssl._create_default_https_context = _ssl._create_unverified_context
+                log.warning("SSL: verify=False (Windows TLS interception, no CA found)")
+                return False
+
+            _ssl_verify = _make_ssl_context()   # str | SSLContext | bool
+
+            # ── Создать Application с правильным SSL для ОБОИХ request handlers ─
+            # PTB использует два отдельных httpx клиента:
+            #   .request()            → обычные API вызовы (get_me, send_message...)
+            #   .get_updates_request()→ polling get_updates (ОТДЕЛЬНЫЙ клиент!)
+            # Нужно патчить ОБА, иначе polling будет падать с SSL.
+            try:
+                from telegram.request import HTTPXRequest
+
+                def _make_req(pool_size: int = 8) -> HTTPXRequest:
+                    return HTTPXRequest(
+                        connection_pool_size=pool_size,
+                        http_version="1.1",
+                        httpx_kwargs={"verify": _ssl_verify},
+                    )
+
+                _req          = _make_req(pool_size=8)   # для обычных запросов
+                _req_polling  = _make_req(pool_size=4)   # для get_updates polling
+
+                builder = (
+                    Application.builder()
+                    .token(cfg.telegram_token)
+                    .request(_req)
+                    .get_updates_request(_req_polling)   # ← ключевой фикс!
+                )
+                app = builder.build()
+                log.info("Telegram: dual HTTPXRequest built (verify=%s)",
+                         type(_ssl_verify).__name__)
+            except Exception as _build_err:
+                log.warning("Custom request build failed (%s), fallback default", _build_err)
+                app = Application.builder().token(cfg.telegram_token).build()
+            self._application = app
+            app_holder[0] = app  # make available to ResilientBot send fn
+
+            # Регистрация всех обработчиков
+            app.add_handler(CommandHandler("start",     _start_cmd))
+            
+
+            app.add_handler(CommandHandler("help",      _help_cmd))
+            app.add_handler(CommandHandler("status",    _status_cmd))
+            app.add_handler(CommandHandler("health",      _health_cmd))
+            app.add_handler(CommandHandler("resilience", _resilience_cmd))
+            app.add_handler(CommandHandler("task",      _task_cmd))
+            app.add_handler(CommandHandler("tasks",     _tasks_cmd))
+            app.add_handler(CommandHandler("agents",    _agents_cmd))
+    
+            app.add_handler(CommandHandler("balance",   _balance_cmd))
+            app.add_handler(CommandHandler("analysis", _analysis_cmd))
+            app.add_handler(CommandHandler("server",   _server_cmd))
+            app.add_handler(CommandHandler("positions", _positions_cmd))
+            app.add_handler(CommandHandler("trading",   _trading_cmd))
+            app.add_handler(CommandHandler("pnl",       _pnl_cmd))
+            app.add_handler(CommandHandler("bot",       _bot_cmd))
+            app.add_handler(CommandHandler("ask",       _ask_cmd))
+            app.add_handler(CommandHandler("math",      _math_cmd))
+            app.add_handler(CommandHandler("news",      _news_cmd))
+            app.add_handler(CommandHandler("plan",      _plan_cmd))
+            app.add_handler(CommandHandler("keys",      _keys_cmd))
+            app.add_handler(CommandHandler("learn",     _learn_cmd))
+            app.add_handler(CommandHandler("freelance", _freelance_cmd))
+            app.add_handler(CommandHandler("pay",       _pay_cmd))
+            app.add_handler(CommandHandler("cot",       _cot_cmd))
+            app.add_handler(CommandHandler("episodic",  _episodic_cmd))
+            app.add_handler(CommandHandler("memory",    _memory_cmd))
+            app.add_handler(CommandHandler("queue",     _queue_cmd))
+            app.add_handler(CommandHandler("tools",     _tools_cmd))
+            app.add_handler(CommandHandler("backup",    _backup_cmd))
+            app.add_handler(CommandHandler("invite",    _invite_cmd))
+            app.add_handler(CommandHandler("users",     _users_cmd))
+            app.add_handler(CommandHandler("revoke",    _revoke_cmd))
+            app.add_handler(CommandHandler("promote",   _promote_cmd))
+            app.add_handler(MessageHandler(
+                filters.TEXT & ~filters.COMMAND, _on_message
+            ))
+
+            # Регистрация команд в меню бота (BotFather)
+            await app.bot.set_my_commands([
+                BotCommand("start",     "Авторизация / приветствие"),
+                BotCommand("help",      "Список всех команд"),
+                BotCommand("status",    "Статус системы"),
+                BotCommand("health",      "Самодиагностика"),
+                BotCommand("resilience", "Статус retry/очереди"),
+                BotCommand("trading",   "Дашборд торгового бота"),
+                BotCommand("analysis", "📊 Анализ рынка [SYMBOL]"),
+                    BotCommand("server",   "🖥 Ресурсы сервера"),
+                    BotCommand("balance",   "Баланс Bybit"),
+                BotCommand("positions", "Открытые позиции"),
+                BotCommand("pnl",       "P&L за сегодня"),
+                BotCommand("ask",       "Задать вопрос AI"),
+                BotCommand("news",      "Крипто-новости"),
+                BotCommand("math",      "Вычислить выражение"),
+                BotCommand("cot",       "Chain-of-Thought отчёт"),
+                BotCommand("memory",    "Статистика памяти и знаний"),
+                BotCommand("tools",     "Список инструментов"),
+                BotCommand("task",       "Запустить автономную задачу"),
+                BotCommand("tasks",     "Список задач агента"),
+                BotCommand("freelance", "Поиск работы / proposal / заработок"),
+                BotCommand("pay",       "Платёжные системы: Stripe/PayPal/крипто"),
+                BotCommand("backup",    "Резервная копия системы"),
+            ])
+
+            async with app:
+                await app.start()
+
+                # Получить username бота
+                bot_me = await app.bot.get_me()
+                self._bot_username = bot_me.username
+                log.info("Bot: @%s", self._bot_username)
+
+                # ── Conflict detector ─────────────────────────────────────────
+                # PTB retries Conflicts internally forever without raising.
+                # We hook into the error handler to count consecutive conflicts
+                # and force a restart after 3 within 30s.
+                _conflict_times: list = []
+                _force_restart = asyncio.Event()
+
+                from telegram.error import Conflict as _TgConflict, NetworkError as _TgNet
+
+                async def _error_handler(update: object, ctx: object) -> None:
+                    err = getattr(ctx, "error", None)
+                    if err is None:
+                        return
+                    log.debug("PTB error handler: %s %s", type(err).__name__, err)
+                    if isinstance(err, _TgConflict):
+                        now = asyncio.get_running_loop().time()
+                        _conflict_times.append(now)
+                        _conflict_times[:] = [t for t in _conflict_times if now - t < 90]
+                        log.warning("Telegram Conflict #%d in last 90s", len(_conflict_times))
+                        if len(_conflict_times) >= 2:
+                            log.error("Persistent Conflict — forcing restart")
+                            _force_restart.set()
+                    elif isinstance(err, _TgNet):
+                        log.debug("Telegram NetworkError (transient): %s", err)
+                    else:
+                        from telegram.error import TimedOut as _TgTO, RetryAfter as _TgRA, BadRequest as _TgBR
+                        if isinstance(err, _TgTO):
+                            log.debug("Telegram TimedOut (transient)")
+                        elif isinstance(err, _TgRA):
+                            log.warning("Telegram RetryAfter: wait %ds", err.retry_after)
+                        elif isinstance(err, _TgBR):
+                            log.warning("Telegram BadRequest: %s", err)
+                        else:
+                            log.error("Unhandled Telegram error [%s]: %s",
+                                      type(err).__name__, err, exc_info=False)
+
+                app.add_error_handler(_error_handler)
+
+                await app.updater.start_polling(
+                    drop_pending_updates=True,
+                    allowed_updates=["message", "callback_query"],
+                )
+                log.info("Telegram bot polling started (attempt #%d)", self._reconnect_attempt)
+                self._reconnect_attempt = 0
+
+                # Уведомление о запуске владельцу
+                if self._owner_id:
+                    try:
+                        await app.bot.send_message(
+                            chat_id=self._owner_id,
+                            text=(
+                                f"🚀 <b>Personal AI v4.0 запущен!</b>\n\n"
+                                f"🔐 Режим: <b>Invite-Only</b>\n"
+                                f"👤 Только авторизованные пользователи могут использовать бота.\n\n"
+                                f"📋 Полезные команды:\n"
+                                f"/invite — создать инвайт-ссылку\n"
+                                f"/users — все пользователи\n"
+                                f"/status — статус системы\n"
+                                f"/trading — торговый бот\n"
+                                f"/help — все команды"
+                            ),
+                            parse_mode=ParseMode.HTML
+                        )
+                    except Exception as e:
+                        log.warning("Could not send startup message: %s", e)
+
+                # Основной цикл — выходим если stop_event ИЛИ persistent conflict
+                while not self._stop_event.is_set() and not _force_restart.is_set():
+                    await asyncio.sleep(1)
+
+                await app.updater.stop()
+                await app.stop()
+
+                if _force_restart.is_set() and not self._stop_event.is_set():
+                    raise RuntimeError("Telegram persistent Conflict — forced restart")
+
+        try:
+            self._loop.run_until_complete(_run_async())
+        except Exception as e:
+            log.error("Telegram _run_bot error: %s", e)
+            raise
+        finally:
+            try:
+                if self._resilient:
+                    self._resilient.mark_disconnected()
+                    self._resilient.stop()
+            except Exception:
+                pass
+            try:
+                self._loop.close()
+            except Exception:
+                pass
+            self._application = None
+            self._loop = None

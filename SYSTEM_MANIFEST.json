@@ -1,0 +1,135 @@
+{
+  "manifest_version": "1.0",
+  "generated_at": "2026-05-16T17:03:49Z",
+  "system_name": "Корпорация MaxAI v4.0",
+  "server": "77.90.2.171",
+  "service_active_since": "Sat 2026-05-16 12:00:51 -05",
+  "core_system": {
+    "status": "ok",
+    "version": "4.0",
+    "agents_loaded": 21,
+    "service": "Корпорация MaxAI"
+  },
+  "business_system": {
+    "system_integrity": "OK",
+    "orchestrator_running": true,
+    "loop_count": 2,
+    "projects_count": 5,
+    "active_projects": [
+      "micro_saas",
+      "media_247",
+      "pod_merch",
+      "fin_agent",
+      "edtech_gen"
+    ],
+    "projects_detail": {
+      "micro_saas": {
+        "run_count": 2,
+        "error_count": 0,
+        "roi": 0.0,
+        "routing": "ECONOMY"
+      },
+      "media_247": {
+        "run_count": 2,
+        "error_count": 0,
+        "roi": 0.0,
+        "routing": "ECONOMY"
+      },
+      "pod_merch": {
+        "run_count": 2,
+        "error_count": 0,
+        "roi": 0.0,
+        "routing": "ECONOMY"
+      },
+      "fin_agent": {
+        "run_count": 2,
+        "error_count": 0,
+        "roi": 0.0,
+        "routing": "ECONOMY"
+      },
+      "edtech_gen": {
+        "run_count": 2,
+        "error_count": 0,
+        "roi": 0.0,
+        "routing": "ECONOMY"
+      }
+    },
+    "fin_agent_trends": [
+      "AI automation",
+      "crypto market moves",
+      "content automation"
+    ]
+  },
+  "self_healing": {
+    "ok": true,
+    "checks_run": 1,
+    "fixes_applied": 0,
+    "disk_used_pct": 4.0,
+    "apex_service": "active"
+  },
+  "memory_system": {
+    "total_episodes": 141,
+    "unique_sessions": 12,
+    "consolidated": 4,
+    "avg_importance": 0.527
+  },
+  "code_quality": {
+    "web_automation_agent_syntax": "OK",
+    "sub_agents_syntax": "OK:/root/autonomous-ai-business/sub_projects/edtech_gen/agent.py, OK:/root/autonomous-ai-business/sub_projects/fin_agent/agent.py, OK:/root/autonomous-ai-business/sub_projects/media_247/agent.py, OK:/root/autonomous-ai-business/sub_projects/micro_saas/agent.py, OK:/root/autonomous-ai-business/sub_pr",
+    "routes_syntax": "SYNTAX_OK",
+    "orchestrator_syntax": "SYNTAX_OK",
+    "self_healing_syntax": "SYNTAX_OK"
+  },
+  "known_issues": [
+    {
+      "id": "WARN-01",
+      "component": "EmailAgent",
+      "severity": "WARNING",
+      "description": "Gmail IMAP auth fails — App Password needed (not regular password)",
+      "fix": "Run /root/my_personal_ai/scripts/setup_gmail.sh with an App Password from myaccount.google.com/apppasswords",
+      "blocks_system": false
+    },
+    {
+      "id": "WARN-02",
+      "component": "LLMRouter / OpenAI",
+      "severity": "WARNING",
+      "description": "OpenAI API key returns 401 — key expired or rotated",
+      "fix": "Update OPENAI_API_KEY in /root/my_personal_ai/.env; system falls back to Claude/DeepSeek automatically",
+      "blocks_system": false
+    },
+    {
+      "id": "INFO-01",
+      "component": "BusinessSystem ROI",
+      "severity": "INFO",
+      "description": "All sub-projects at ROI=0 (no revenue yet — seed period)",
+      "fix": "Normal for Day 0; revenue tracking begins after first real executions with active API keys",
+      "blocks_system": false
+    }
+  ],
+  "architecture_status": {
+    "event_driven_bus": "ACTIVE",
+    "fts_search_triggers": "PATCHED (INSERT+UPDATE+DELETE)",
+    "thread_safe_db_pool": "ACTIVE (threading.local)",
+    "exponential_backoff": "ACTIVE (tenacity wrappers)",
+    "self_correction_loop": "ACTIVE (MAX_RETRIES=3, LLM selector fallback)",
+    "master_prompt_injection": "ACTIVE (MaxAI identity injected in _build_system_prompt)",
+    "chief_orchestrator": "ACTIVE (5-min loop, ROI-driven allocation)",
+    "web_automation_v2": "ACTIVE (Playwright stealth + CF/CAPTCHA handler)",
+    "dashboard_business_tab": "ACTIVE (React BusinessTab component injected)"
+  },
+  "autonomy_features": {
+    "self_training_hourly": true,
+    "auto_knowledge_seeding": true,
+    "chief_orchestrator_loop_s": 300,
+    "sub_projects": 5,
+    "roi_threshold": 1.0,
+    "budget_reallocation": "proportional to 14d revenue/cost ratio",
+    "self_healing_checks": [
+      "config",
+      "syntax",
+      "disk",
+      "apex_svc",
+      "log_rotation"
+    ]
+  }
+}

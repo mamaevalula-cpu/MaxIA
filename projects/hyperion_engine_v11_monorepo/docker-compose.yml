@@ -1,0 +1,45 @@
+version: "3.9"
+
+services:
+  api-gateway:
+    build: .
+    command: uvicorn api.gateway:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    environment:
+      - LOG_LEVEL=INFO
+      - DB_PATH=/data/hyperion.db
+    volumes:
+      - hyperion_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  task-executor:
+    build: .
+    command: python -m agents.task_executor_agent
+    environment:
+      - LOG_LEVEL=INFO
+      - CONCURRENCY=4
+    volumes:
+      - hyperion_data:/data
+    restart: unless-stopped
+    depends_on:
+      - api-gateway
+
+  scaler:
+    build: .
+    command: python -m agents.scaler_service
+    environment:
+      - LOG_LEVEL=INFO
+      - QUEUE_HIGH_WATERMARK=50
+      - QUEUE_LOW_WATERMARK=5
+    volumes:
+      - hyperion_data:/data
+    restart: unless-stopped
+
+volumes:
+  hyperion_data:

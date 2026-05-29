@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""apex-watchdog: monitors personal-ai.service and auto-restarts if frozen."""
+import time, subprocess, os, logging
+import sys
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    handlers=[
+        logging.FileHandler("/root/my_personal_ai/logs/watchdog_auto.log"),
+        logging.StreamHandler(),
+    ],
+)
+log = logging.getLogger("watchdog")
+
+CHECK_INTERVAL = 60
+MAX_LOG_SILENCE = 600   # 10 min without brain.log update = frozen
+RESTART_COOLDOWN = 180  # min seconds between restarts
+_last_restart = 0.0
+
+def service_active():
+    try:
+        r = subprocess.run(["systemctl", "is-active", "personal-ai.service"],
+            capture_output=True, text=True, timeout=5)
+        return r.stdout.strip() == "active"
+    except Exception:
+        return False
+
+def log_fresh():
+    try:
+        mtime = os.path.getmtime("/root/my_personal_ai/logs/brain.log")
+        return (time.time() - mtime) < MAX_LOG_SILENCE
+    except Exception:
+        return True
+
+def tg_alert(msg):
+    try:
+        import httpx
+        from dotenv import load_dotenv
+        load_dotenv("/root/my_personal_ai/.env")
+        tok = os.getenv("TELEGRAM_BOT_TOKEN", "")
+        cid = os.getenv("TELEGRAM_CHAT_ID", "")
+        if tok and cid:
+            httpx.post(f"https://api.telegram.org/bot{tok}/sendMessage",
+                json={"chat_id": cid, "text": msg}, timeout=6)
+    except Exception:
+        pass
+
+def do_restart(reason):
+    global _last_restart
+    if time.time() - _last_restart < RESTART_COOLDOWN:
+        log.warning("Restart skipped (cooldown)")
+        return
+    _last_restart = time.time()
+    log.warning("RESTART: %s", reason)
+    subprocess.run(["systemctl", "restart", "personal-ai.service"], timeout=30)
+    time.sleep(10)
+    status = "active" if service_active() else "FAILED"
+    tg_alert(f"[WATCHDOG] Бот перезапущен ({reason}). Статус: {status}")
+    log.info("Restart done, service=%s", status)
+
+fails = 0
+log.info("Watchdog started")
+tg_alert("[WATCHDOG] Старт — бот под наблюдением")
+
+while True:
+    try:
+        alive = service_active()
+        fresh = log_fresh()
+        if not alive:
+            fails += 1
+            log.warning("Service not active (fail #%d)", fails)
+            if fails >= 2:
+                do_restart("service not active")
+                fails = 0
+        elif not fresh:
+            fails += 1
+            log.warning("brain.log stale >10min (fail #%d)", fails)
+            if fails >= 2:
+                do_restart("bot frozen (no log updates)")
+                fails = 0
+        else:
+            if fails > 0:
+                log.info("Recovered after %d fails", fails)
+            fails = 0
+    except Exception as e:
+        log.error("Watchdog error: %s", e)
+    time.sleep(CHECK_INTERVAL)

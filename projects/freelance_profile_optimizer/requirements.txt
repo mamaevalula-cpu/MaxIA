@@ -1,0 +1,3 @@
+# Requirements for freelance_profile_optimizer
+python-dotenv
+httpx

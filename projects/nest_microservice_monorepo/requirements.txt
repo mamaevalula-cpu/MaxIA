@@ -1,0 +1,3 @@
+# Requirements for nest_microservice_monorepo
+python-dotenv
+httpx

@@ -1,0 +1,55 @@
+version: "2.0"
+
+services:
+  maxai-worker:
+    image: python:3.11-slim
+    env:
+      - MAXAI_API_URL=http://77.90.2.171:8090
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+    command:
+      - /bin/sh
+      - -c
+      - |
+        pip install requests && python3 -c "
+        import requests, os, time
+        while True:
+            # Fetch tasks from MaxAI
+            try:
+                r = requests.get(os.environ['MAXAI_API_URL'] + '/api/tasks', timeout=10)
+                tasks = r.json().get('tasks', [])
+                pending = [t for t in tasks if t.get('status') == 'pending']
+                if pending:
+                    print(f'Processing {len(pending)} tasks...')
+            except Exception as e:
+                print(f'Error: {e}')
+            time.sleep(30)
+        "
+    expose:
+      - port: 8080
+        as: 80
+        to:
+          - global: false
+
+profiles:
+  compute:
+    maxai-worker:
+      resources:
+        cpu:
+          units: 0.5
+        memory:
+          size: 256Mi
+        storage:
+          size: 1Gi
+  placement:
+    dcloud:
+      pricing:
+        maxai-worker:
+          denom: uakt
+          amount: 1000
+
+deployment:
+  maxai-worker:
+    dcloud:
+      profile: maxai-worker
+      count: 1

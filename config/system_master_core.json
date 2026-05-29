@@ -1,0 +1,160 @@
+{
+  "schema_version": "1.0",
+  "generated_at": 1779051748.6487536,
+  "generated_at_human": "2026-05-17 16:02:28",
+  "system": {
+    "name": "MaxAI Personal AI",
+    "version": "4.0",
+    "server": "77.90.2.171",
+    "os": "Linux AI-Assistant 6.8.0-71-generic #71-Ubuntu SMP PREEMPT_DYNAMIC Tue Jul 22 16:52:38 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux",
+    "python": "Python 3.12.3",
+    "panel_url": "http://77.90.2.171:8080",
+    "api_base": "http://77.90.2.171:8080/api"
+  },
+  "projects": [
+    {
+      "name": "my_personal_ai",
+      "path": "/root/my_personal_ai",
+      "stack": [
+        "python"
+      ],
+      "entry_points": [
+        "main.py"
+      ],
+      "py_files": 135,
+      "recent_commit": "",
+      "disk_size": "70M",
+      "active": true
+    },
+    {
+      "name": "bybit-bot",
+      "path": "/root/bybit-bot",
+      "stack": [],
+      "entry_points": [],
+      "py_files": 14,
+      "recent_commit": "",
+      "disk_size": "3.1M",
+      "active": true
+    }
+  ],
+  "agents": [
+    "analyzer",
+    "base",
+    "browser",
+    "code_bridge",
+    "code_runner",
+    "coder",
+    "email",
+    "freelance",
+    "image",
+    "key_manager",
+    "math",
+    "monitor",
+    "news",
+    "order",
+    "payment",
+    "planner",
+    "search",
+    "self_training",
+    "summarizer",
+    "task_executor",
+    "telegram",
+    "trading",
+    "web_automation"
+  ],
+  "llm_providers": {
+    "openai": {
+      "model": "gpt-4o",
+      "configured": true
+    },
+    "anthropic": {
+      "model": "claude-3-5-haiku-20241022",
+      "configured": true
+    },
+    "groq": {
+      "model": "llama-3.3-70b-versatile",
+      "configured": true
+    }
+  },
+  "env_configured_keys": [
+    "﻿#",
+    "OPENAI_API_KEY",
+    "OPENAI_MODEL",
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_MODEL",
+    "GOOGLE_API_KEY",
+    "GEMINI_MODEL",
+    "XAI_API_KEY",
+    "GROK_MODEL",
+    "DEEPSEEK_API_KEY",
+    "DEEPSEEK_MODEL",
+    "GROQ_API_KEY",
+    "GROQ_MODEL",
+    "TOGETHER_API_KEY",
+    "TOGETHER_MODEL",
+    "MISTRAL_API_KEY",
+    "MISTRAL_MODEL",
+    "PERPLEXITY_API_KEY",
+    "OLLAMA_URL",
+    "OLLAMA_MODEL",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_CHAT_ID",
+    "TELEGRAM_ADMIN_IDS",
+    "TELEGRAM_INVITE_TTL_HOURS",
+    "BYBIT_API_KEY",
+    "BYBIT_API_SECRET",
+    "BYBIT_TESTNET",
+    "TRADING_LIVE_CONFIRMED",
+    "EMAIL_ADDRESS",
+    "EMAIL_PASSWORD",
+    "IMAP_SERVER",
+    "IMAP_PORT",
+    "VECTOR_BACKEND",
+    "PINECONE_API_KEY",
+    "PINECONE_ENVIRONMENT",
+    "MASTER_PASSWORD",
+    "LOG_LEVEL",
+    "MAX_PARALLEL_AGENTS",
+    "AGENT_TASK_TIMEOUT",
+    "BYBIT_BOT_HEALTH_URL",
+    "SYSTEM_PROMPT_PATH",
+    "RESEND_API_KEY",
+    "OUTREACH_FROM_EMAIL",
+    "OUTREACH_DOMAIN",
+    "NAMECHEAP_USER",
+    "NAMECHEAP_PASS",
+    "OWNER_EMAIL"
+  ],
+  "services": {
+    "personal-ai": "active"
+  },
+  "capabilities": [
+    "autonomous_planning",
+    "code_execution",
+    "file_management",
+    "web_browsing_tor",
+    "email_integration",
+    "bybit_trading",
+    "telegram_bot",
+    "crypto_prices",
+    "news_monitoring",
+    "self_training",
+    "knowledge_base",
+    "memory_store"
+  ],
+  "panel_tabs": [
+    "overview",
+    "chat",
+    "agents",
+    "trading",
+    "browser",
+    "email",
+    "projects",
+    "developer",
+    "money_tools",
+    "knowledge",
+    "logs",
+    "settings"
+  ],
+  "master_prompt": "You are MaxAI — autonomous AI system controlling server 77.90.2.171. You have full access to filesystem, terminal, browser, email, and trading. Always respond in the user's language. Execute tasks autonomously without asking for confirmation unless irreversible destructive action is required."
+}

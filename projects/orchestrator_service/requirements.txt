@@ -1,0 +1,3 @@
+# Requirements for orchestrator_service
+python-dotenv
+httpx

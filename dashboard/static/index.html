@@ -1,0 +1,2573 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MaxAI — Центр управления</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#030710;--bg2:#060d1c;--bg3:#091428;--bg4:#0c1b36;
+  --brd:#0d1c38;--brd2:#142c52;--brd3:#1c3d70;
+  --txt:#c8d8f0;--txt2:#628aae;--txt3:#2d4a66;
+  --acc:#00d4ff;--acc2:#0090c8;
+  --grn:#00e87a;--grn2:#00b860;
+  --red:#ff2d55;--red2:#c01840;
+  --yel:#ffcc00;--yel2:#c09800;
+  --pur:#a060f0;--pur2:#7030c0;
+  --ora:#ff7a20;
+  --r:10px;--r2:7px;--r3:4px;
+  --sh:0 4px 24px rgba(0,0,0,.7);
+  --glow-acc:0 0 24px rgba(0,212,255,.18);
+  --glow-grn:0 0 24px rgba(0,232,122,.18);
+}
+body{background:var(--bg);color:var(--txt);font-family:'Inter','Segoe UI',system-ui,sans-serif;font-size:13px;min-height:100vh}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--brd2);border-radius:2px}
+::-webkit-scrollbar-thumb:hover{background:var(--brd3)}
+
+/* ═══ HEADER ═══ */
+#hdr{
+  height:54px;
+  background:linear-gradient(90deg,#020610 0%,#070f22 30%,#0a1630 50%,#070f22 70%,#020610 100%);
+  border-bottom:1px solid rgba(20,44,82,.9);
+  display:flex;align-items:center;
+  padding:0 24px;gap:14px;position:sticky;top:0;z-index:200;
+  box-shadow:0 1px 30px rgba(0,0,0,.8),0 0 0 1px rgba(0,212,255,.04);
+}
+#logo{display:flex;align-items:center;gap:10px;margin-right:4px}
+#logo-icon{width:32px;height:32px;background:linear-gradient(135deg,#0060b0,#00d4ff);border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:17px;box-shadow:0 0 20px rgba(0,212,255,.5),0 0 40px rgba(0,212,255,.15)}
+#logo-text{font-size:15px;font-weight:700;color:#e8f4ff;letter-spacing:1.5px}
+#logo-ver{font-size:9px;color:var(--txt3);letter-spacing:.5px;margin-top:1px}
+#hdr-chips{display:flex;gap:6px;flex:1}
+.hchip{display:flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap}
+.hchip-g{background:#00d88015;border:1px solid #00d88040;color:var(--grn)}
+.hchip-r{background:#ff305015;border:1px solid #ff305040;color:var(--red)}
+.hchip-y{background:#ffb80015;border:1px solid #ffb80040;color:var(--yel)}
+.hchip-b{background:#3ab8e815;border:1px solid #3ab8e840;color:var(--acc)}
+.pulse{width:6px;height:6px;border-radius:50%;background:currentColor;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+#hdr-time{color:var(--txt3);font-size:11px;font-family:'Consolas',monospace;margin-left:8px}
+#hdr-refresh{background:none;border:1px solid var(--brd2);color:var(--txt3);padding:4px 8px;border-radius:var(--r2);cursor:pointer;font-size:11px;transition:all .15s}
+#hdr-refresh:hover{border-color:var(--acc);color:var(--acc)}
+
+/* ═══ TABS ═══ */
+#tabs{
+  background:linear-gradient(180deg,#040a18 0%,#030810 100%);border-bottom:1px solid var(--brd);
+  display:flex;overflow-x:auto;padding:0 8px;
+  position:sticky;top:54px;z-index:199;gap:2px;
+}
+#tabs::-webkit-scrollbar{height:2px}
+.tb{
+  display:flex;align-items:center;gap:6px;
+  padding:10px 16px;cursor:pointer;color:var(--txt3);
+  font-size:12px;font-weight:500;border-bottom:2px solid transparent;
+  white-space:nowrap;transition:all .15s;user-select:none;border-radius:var(--r2) var(--r2) 0 0
+}
+.tb:hover{color:var(--txt);background:rgba(0,212,255,.04)}
+.tb.on{color:var(--acc);border-bottom-color:var(--acc);background:rgba(0,212,255,.06);text-shadow:0 0 12px rgba(0,212,255,.35)}
+.tb-ico{font-size:14px;line-height:1}
+
+/* ═══ CONTENT ═══ */
+.sc{display:none;padding:20px;animation:fadeIn .2s ease}
+.sc.on{display:block}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+/* ═══ GRIDS ═══ */
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:14px}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+.g5{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px}
+@media(max-width:1100px){.g5{grid-template-columns:repeat(3,1fr)}.g4{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:700px){.g2,.g3,.g4,.g5{grid-template-columns:1fr}}
+
+/* ═══ CARD ═══ */
+.card{
+  background:linear-gradient(160deg,rgba(9,20,42,.98) 0%,rgba(6,13,28,.98) 100%);
+  border:1px solid var(--brd2);border-radius:var(--r);
+  padding:18px;
+  box-shadow:0 4px 28px rgba(0,0,0,.75),inset 0 1px 0 rgba(255,255,255,.04);
+  transition:all .2s;position:relative;overflow:hidden;
+}
+.card::before{
+  content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(0,212,255,.14),transparent);
+  pointer-events:none;
+}
+.card:hover{
+  border-color:rgba(0,212,255,.25);
+  box-shadow:0 6px 36px rgba(0,0,0,.75),0 0 0 1px rgba(0,212,255,.09),inset 0 1px 0 rgba(255,255,255,.06);
+  transform:translateY(-1px);
+}
+.card-title{
+  color:var(--txt3);font-size:10px;text-transform:uppercase;
+  letter-spacing:1.5px;margin-bottom:12px;font-weight:700;
+  display:flex;align-items:center;gap:6px
+}
+.card-title-ico{font-size:12px;opacity:.7}
+
+/* ═══ STAT CARD ═══ */
+.stat{
+  background:linear-gradient(160deg,rgba(9,20,42,.98) 0%,rgba(6,13,28,.98) 100%);
+  border:1px solid var(--brd2);border-radius:var(--r);
+  padding:18px 20px;
+  box-shadow:0 4px 28px rgba(0,0,0,.75),inset 0 1px 0 rgba(255,255,255,.04);
+  transition:all .2s;position:relative;overflow:hidden;
+}
+.stat::before{
+  content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(0,212,255,.1),transparent);pointer-events:none;
+}
+.stat:hover{border-color:rgba(0,212,255,.22);transform:translateY(-1px)}
+.stat-val{font-size:28px;font-weight:900;color:#ddeeff;line-height:1;margin-bottom:6px;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+.stat-lbl{font-size:10px;color:var(--txt2);margin-bottom:2px;text-transform:uppercase;letter-spacing:1px}
+.stat-sub{font-size:10px;color:var(--txt3)}
+.stat-grn .stat-val{color:var(--grn);text-shadow:0 0 22px rgba(0,232,122,.35)}
+.stat-red .stat-val{color:var(--red);text-shadow:0 0 22px rgba(255,45,85,.35)}
+.stat-yel .stat-val{color:var(--yel);text-shadow:0 0 22px rgba(255,204,0,.35)}
+.stat-acc .stat-val{color:var(--acc);text-shadow:0 0 22px rgba(0,212,255,.35)}
+
+/* ═══ PROGRESS ═══ */
+.pb{height:4px;background:var(--brd);border-radius:2px;margin-top:8px;overflow:hidden}
+.pb-f{height:100%;border-radius:2px;transition:width .8s ease}
+.pb-acc{background:linear-gradient(90deg,var(--acc2),var(--acc))}
+.pb-grn{background:linear-gradient(90deg,var(--grn2),var(--grn))}
+.pb-red{background:linear-gradient(90deg,var(--red2),var(--red))}
+.pb-yel{background:linear-gradient(90deg,var(--yel2),var(--yel))}
+.pb-pur{background:linear-gradient(90deg,var(--pur2),var(--pur))}
+
+/* ═══ BADGES ═══ */
+.badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700;letter-spacing:.3px}
+.b-g{background:#00d88018;border:1px solid #00d88050;color:var(--grn)}
+.b-r{background:#ff305018;border:1px solid #ff305050;color:var(--red)}
+.b-y{background:#ffb80018;border:1px solid #ffb80050;color:var(--yel)}
+.b-b{background:#3ab8e818;border:1px solid #3ab8e850;color:var(--acc)}
+.b-p{background:#9050e018;border:1px solid #9050e050;color:var(--pur)}
+.b-o{background:#ff702018;border:1px solid #ff702050;color:var(--ora)}
+
+/* ═══ STATUS DOT ═══ */
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.dot-g{background:var(--grn);box-shadow:0 0 8px var(--grn),0 0 16px rgba(0,232,122,.4)}
+.dot-r{background:var(--red);box-shadow:0 0 8px var(--red),0 0 16px rgba(255,45,85,.4)}
+.dot-y{background:var(--yel);box-shadow:0 0 8px var(--yel),0 0 16px rgba(255,204,0,.4)}
+.dot-b{background:var(--acc);box-shadow:0 0 8px var(--acc),0 0 16px rgba(0,212,255,.4)}
+
+/* ═══ TABLE ═══ */
+.tbl-wrap{overflow-x:auto;border-radius:var(--r2);border:1px solid var(--brd)}
+table{width:100%;border-collapse:collapse}
+thead{background:#0a1525}
+th{color:var(--txt3);font-size:10px;text-transform:uppercase;letter-spacing:1px;padding:8px 12px;text-align:left;border-bottom:1px solid var(--brd);white-space:nowrap;font-weight:700}
+td{padding:8px 12px;border-bottom:1px solid #080e18;font-size:12px;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#0a1525}
+tbody tr{transition:background .1s}
+
+/* ═══ ROW ═══ */
+.row{display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid #0a1020}
+.row:last-child{border:none}
+.row-left{display:flex;align-items:center;gap:8px;color:var(--txt2)}
+.row-right{font-weight:600;color:var(--txt)}
+
+/* ═══ BUTTONS ═══ */
+.btn{
+  display:inline-flex;align-items:center;gap:6px;
+  background:rgba(0,212,255,.07);border:1px solid rgba(0,212,255,.25);color:var(--acc);
+  padding:7px 16px;border-radius:var(--r2);cursor:pointer;font-size:12px;
+  font-weight:600;transition:all .15s;white-space:nowrap;letter-spacing:.3px;
+}
+.btn:hover{
+  background:rgba(0,212,255,.14);border-color:var(--acc);
+  box-shadow:0 0 16px rgba(0,212,255,.2),inset 0 1px 0 rgba(255,255,255,.06);
+}
+.btn:active{transform:scale(.97)}
+.btn:disabled{opacity:.35;cursor:not-allowed;pointer-events:none}
+.btn-g{background:rgba(0,232,122,.07);border-color:rgba(0,232,122,.3);color:var(--grn)}
+.btn-g:hover{background:rgba(0,232,122,.14);border-color:var(--grn);box-shadow:0 0 14px rgba(0,232,122,.2)}
+.btn-r{background:rgba(255,45,85,.07);border-color:rgba(255,45,85,.3);color:var(--red)}
+.btn-r:hover{background:rgba(255,45,85,.14);border-color:var(--red);box-shadow:0 0 14px rgba(255,45,85,.2)}
+.btn-y{background:rgba(255,204,0,.07);border-color:rgba(255,204,0,.3);color:var(--yel)}
+.btn-y:hover{background:rgba(255,204,0,.14);border-color:var(--yel);box-shadow:0 0 14px rgba(255,204,0,.2)}
+.btn-sm{padding:4px 10px;font-size:11px}
+
+/* ═══ INPUT / TEXTAREA ═══ */
+.inp{background:#030810;border:1px solid var(--brd2);color:var(--txt);padding:8px 12px;border-radius:var(--r2);font-size:12px;width:100%;outline:none;transition:border-color .15s}
+.inp:focus{border-color:var(--acc);box-shadow:0 0 0 2px #3ab8e815}
+.inp::placeholder{color:var(--txt3)}
+textarea.inp{resize:vertical;font-family:'Consolas',monospace;line-height:1.6}
+select.inp{cursor:pointer}
+
+/* ═══ LOG BOX ═══ */
+.logbox{
+  background:#020608;border:1px solid var(--brd);border-radius:var(--r2);
+  padding:12px;font-family:'Cascadia Code','Consolas',monospace;font-size:11px;color:#00c8a0;
+  line-height:1.8;overflow-y:auto;white-space:pre-wrap;word-break:break-word;
+  box-shadow:inset 0 2px 14px rgba(0,0,0,.6);
+}
+
+/* ═══ SECTION TITLE ═══ */
+.sec-title{
+  font-size:11px;color:var(--txt3);text-transform:uppercase;letter-spacing:2px;
+  font-weight:700;margin:18px 0 10px;padding-bottom:6px;
+  border-bottom:1px solid var(--brd);display:flex;align-items:center;gap:8px
+}
+.sec-title span{flex:1}
+
+/* ═══ ALERT BOX ═══ */
+.alert{padding:10px 14px;border-radius:var(--r2);font-size:12px;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.alert-r{background:#ff305010;border:1px solid #ff305040;color:var(--red)}
+.alert-g{background:#00d88010;border:1px solid #00d88040;color:var(--grn)}
+.alert-y{background:#ffb80010;border:1px solid #ffb80040;color:var(--yel)}
+.alert-b{background:#3ab8e810;border:1px solid #3ab8e840;color:var(--acc)}
+
+/* ═══ CHAT ═══ */
+#chat-box{
+  height:500px;overflow-y:auto;padding:16px;
+  display:flex;flex-direction:column;gap:10px;
+  background:#020608;border:1px solid var(--brd2);
+  border-radius:var(--r) var(--r) 0 0;
+  box-shadow:inset 0 2px 16px rgba(0,0,0,.6);
+}
+.msg-user{
+  align-self:flex-end;
+  background:linear-gradient(135deg,rgba(0,80,140,.8),rgba(0,100,180,.6));
+  border:1px solid rgba(0,212,255,.25);
+  padding:10px 16px;border-radius:16px 16px 4px 16px;
+  max-width:72%;font-size:12px;color:#ddeeff;
+  box-shadow:0 2px 12px rgba(0,80,180,.3);
+}
+.msg-ai{
+  align-self:flex-start;
+  background:linear-gradient(135deg,rgba(9,20,42,.95),rgba(6,13,28,.95));
+  border:1px solid var(--brd2);
+  padding:10px 16px;border-radius:16px 16px 16px 4px;
+  max-width:84%;font-size:12px;
+  box-shadow:0 2px 12px rgba(0,0,0,.4);
+}
+.msg-ai pre{white-space:pre-wrap;word-break:break-word;margin:0;color:var(--txt);line-height:1.65}
+.msg-time{font-size:9px;color:var(--txt3);margin-top:4px;text-align:right;opacity:.7}
+#chat-send-row{
+  display:flex;gap:8px;
+  background:rgba(4,12,24,.95);
+  border:1px solid var(--brd2);border-top:none;
+  padding:12px;border-radius:0 0 var(--r) var(--r);
+}
+
+/* ═══ PLATFORM CARD ═══ */
+.plat-card{background:linear-gradient(160deg,rgba(9,20,42,.98),rgba(6,13,28,.98));border:1px solid var(--brd2);border-radius:var(--r);padding:14px;transition:all .2s}
+.plat-card:hover{border-color:var(--brd3);transform:translateY(-1px);box-shadow:0 4px 20px rgba(0,0,0,.4)}
+.plat-name{font-size:12px;font-weight:700;color:#ddeeff;margin-bottom:4px}
+.plat-cat{font-size:10px;color:var(--txt3);margin-bottom:8px}
+
+/* ═══ SKILL CARD ═══ */
+.skill-item{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #090f1c}
+.skill-item:last-child{border:none}
+.skill-rank{font-size:11px;color:var(--txt3);width:20px;text-align:center}
+.skill-name{flex:1;font-size:11px;color:var(--txt2)}
+.skill-ev{font-weight:700;font-size:13px}
+
+/* ═══ LOADER ═══ */
+.loader{display:inline-block;width:16px;height:16px;border:2px solid var(--brd2);border-top-color:var(--acc);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-wrap{display:flex;align-items:center;justify-content:center;padding:40px;gap:10px;color:var(--txt3)}
+
+/* ═══ INCIDENT BUTTONS ═══ */
+.incident-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+@media(max-width:800px){.incident-grid{grid-template-columns:repeat(2,1fr)}}
+.inc-btn{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+  padding:14px;border-radius:var(--r);cursor:pointer;font-size:11px;font-weight:700;
+  border:1px solid;transition:all .2s;text-align:center;letter-spacing:.3px
+}
+.inc-btn .inc-ico{font-size:22px}
+.inc-btn:hover{transform:translateY(-2px);box-shadow:0 6px 20px rgba(0,0,0,.4)}
+.inc-btn:active{transform:scale(.96)}
+.inc-kill{background:#ff305010;border-color:#ff305040;color:var(--red)}
+.inc-kill:hover{background:#ff305025;border-color:var(--red)}
+.inc-block{background:#ffb80010;border-color:#ffb80040;color:var(--yel)}
+.inc-block:hover{background:#ffb80025;border-color:var(--yel)}
+.inc-roll{background:#3ab8e810;border-color:#3ab8e840;color:var(--acc)}
+.inc-roll:hover{background:#3ab8e825;border-color:var(--acc)}
+.inc-back{background:#9050e010;border-color:#9050e040;color:var(--pur)}
+.inc-back:hover{background:#9050e025;border-color:var(--pur)}
+
+/* ═══ FEEDBACK ═══ */
+.fb{font-size:11px;padding:4px 10px;border-radius:var(--r2);margin-left:8px;opacity:0;transition:opacity .3s}
+.fb.show{opacity:1}
+.fb-ok{background:#00d88015;color:var(--grn);border:1px solid #00d88040}
+.fb-err{background:#ff305015;color:var(--red);border:1px solid #ff305040}
+
+/* ═══ PHASE BARS ═══ */
+.phase-item{margin-bottom:14px}
+.phase-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px}
+.phase-name{font-size:12px;color:var(--txt2);font-weight:600}
+.phase-target{font-size:11px;color:var(--acc);font-weight:700}
+.phase-pct{font-size:10px;color:var(--txt3);margin-top:3px}
+
+/* ═══ GRADE BADGE ═══ */
+.grade-a{font-size:15px;font-weight:800;color:var(--grn)}
+.grade-b{font-size:15px;font-weight:800;color:var(--acc)}
+.grade-c{font-size:15px;font-weight:800;color:var(--yel)}
+.grade-d,.grade-f{font-size:15px;font-weight:800;color:var(--red)}
+
+/* ??? UX v3.5 ? Browser & Chat Premium ??????????????????????????????????? */
+/* Browser: loading overlay */
+.br-screen-wrap { position:relative;background:#040a14;border-radius:6px;overflow:hidden;min-height:260px;border:1px solid var(--brd) }
+#br-load-overlay { position:absolute;inset:0;background:rgba(4,12,24,.75);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;z-index:10;opacity:0;pointer-events:none;transition:opacity .25s }
+#br-load-overlay.active { opacity:1;pointer-events:all }
+#br-load-overlay .spin { width:32px;height:32px;border:3px solid #0d6efd30;border-top-color:var(--acc);border-radius:50%;animation:spin 0.7s linear infinite }
+@keyframes spin { to { transform:rotate(360deg) } }
+/* Browser: nav banner */
+#br-banner { padding:7px 14px;font-size:.8rem;font-weight:600;border-radius:6px;margin-bottom:10px;display:none;align-items:center;gap:8px;animation:fadeInDown .3s }
+#br-banner.ok  { display:flex;background:#00d88012;color:var(--grn);border:1px solid #00d88030 }
+#br-banner.err { display:flex;background:#ff305012;color:var(--red);border:1px solid #ff305030 }
+#br-banner.info{ display:flex;background:#0d6efd12;color:#7eb8ff;border:1px solid #0d6efd30 }
+@keyframes fadeInDown { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:none} }
+/* Browser: URL bar improvement */
+#br-url-wrap { display:flex;gap:6px;margin-bottom:10px;background:#040c18;border:1px solid var(--brd);border-radius:8px;padding:5px 8px;align-items:center }
+#br-url-wrap:focus-within { border-color:var(--acc) }
+#br-url-input { flex:1;background:transparent!important;border:none!important;outline:none;font-size:.84rem;color:var(--txt);padding:2px 4px }
+.br-url-go { background:var(--acc);color:#fff;border:none;border-radius:5px;padding:4px 14px;font-size:.8rem;font-weight:700;cursor:pointer;transition:background .15s }
+.br-url-go:hover { background:#1a7fff }
+.br-url-clear { background:none;border:none;color:var(--txt3);cursor:pointer;font-size:1rem;padding:0 4px;transition:color .15s }
+.br-url-clear:hover { color:var(--red) }
+/* Browser: back-to-chat FAB */
+#br-back-fab { position:fixed;bottom:22px;right:22px;z-index:9999;background:linear-gradient(135deg,var(--acc),#0d4fa0);color:#fff;border:none;border-radius:50px;padding:10px 22px;font-size:.85rem;font-weight:800;cursor:pointer;box-shadow:0 4px 24px #0d6efd50;transition:transform .15s,opacity .2s;display:none;letter-spacing:.3px }
+#br-back-fab:hover { transform:translateY(-2px);box-shadow:0 6px 30px #0d6efd70 }
+#br-back-fab.visible { display:flex;align-items:center;gap:7px }
+/* Chat: premium bubbles */
+#chat-box { padding:14px;display:flex;flex-direction:column;gap:8px;min-height:300px;max-height:520px;overflow-y:auto }
+.cmsg { padding:10px 14px;border-radius:10px;font-size:.84rem;line-height:1.55;max-width:88%;word-break:break-word;position:relative }
+.cmsg-u { background:#0b1e38;border-left:3px solid var(--acc);align-self:flex-end;color:#c8deff }
+.cmsg-a { background:#080f1c;border-left:3px solid #00d88060;align-self:flex-start;color:var(--txt) }
+.cmsg-ts { font-size:9px;color:var(--txt3);text-align:right;margin-top:5px;opacity:.7 }
+.cmsg-thinking { background:#080f1c;border-left:3px solid var(--yel);align-self:flex-start;color:var(--txt3);font-style:italic }
+/* Chat: inline status badges in AI messages */
+.cbadge { display:inline-flex;align-items:center;gap:3px;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:800;letter-spacing:.5px;vertical-align:middle }
+.cbadge-g { background:#00d88018;color:var(--grn);border:1px solid #00d88035 }
+.cbadge-y { background:#ffb80018;color:var(--yel);border:1px solid #ffb80035 }
+.cbadge-r { background:#ff305018;color:var(--red);border:1px solid #ff305035 }
+.cbadge-b { background:#0d6efd18;color:#7eb8ff;border:1px solid #0d6efd35 }
+/* send row */
+#chat-send-row { display:flex;gap:8px;background:#040c18;border:1px solid var(--brd);border-top:none;padding:10px;border-radius:0 0 var(--r2) var(--r2) }
+#chat-inp { flex:1;font-size:.85rem }
+#chat-btn { min-width:90px;font-weight:700 }
+
+/* ═══ BROWSER v2 — iframe-first ═══ */
+.br2-shell{background:var(--bg2);border:1px solid var(--brd2);border-radius:var(--r);overflow:hidden;box-shadow:var(--sh)}
+.br2-tabs{display:flex;align-items:center;gap:4px;flex-wrap:wrap;background:linear-gradient(180deg,rgba(9,20,42,.98),rgba(6,13,28,.98));border-bottom:1px solid var(--brd2);padding:8px 12px}
+.br2-tab{background:rgba(255,255,255,.03);border:1px solid var(--brd);color:var(--txt3);padding:5px 13px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;transition:all .15s;white-space:nowrap}
+.br2-tab:hover{background:rgba(0,212,255,.07);color:var(--txt2);border-color:var(--brd3)}
+.br2-tab.active{background:rgba(0,212,255,.1);color:var(--acc);border-color:rgba(0,212,255,.4);box-shadow:0 0 10px rgba(0,212,255,.12)}
+.br2-spacer{flex:1;min-width:8px}
+.br2-urlbar{display:flex;align-items:center;gap:6px;background:rgba(3,7,16,.8);border:1px solid var(--brd2);border-radius:7px;padding:4px 8px 4px 12px;min-width:200px}
+.br2-urlbar:focus-within{border-color:var(--acc);box-shadow:0 0 0 2px rgba(0,212,255,.1)}
+.br2-urlbar input{background:none;border:none;outline:none;color:var(--txt);font-size:12px;flex:1;min-width:0}
+.br2-urlbar input::placeholder{color:var(--txt3)}
+.br2-urlbar button{background:var(--acc);border:none;color:#000;padding:3px 10px;border-radius:5px;font-size:11px;font-weight:800;cursor:pointer;transition:background .15s;white-space:nowrap}
+.br2-urlbar button:hover{background:#00b8e0}
+.br2-status-pill{display:flex;align-items:center;gap:5px;padding-left:12px;font-size:11px;color:var(--txt2);white-space:nowrap}
+.br2-frame-wrap{position:relative;height:600px;background:#040810}
+.br2-iframe{width:100%;height:100%;border:none;background:#040810;display:block}
+.br2-advanced{background:rgba(6,13,28,.98);border-top:1px solid var(--brd)}
+.br2-advanced summary{padding:9px 16px;cursor:pointer;font-size:11px;color:var(--txt3);user-select:none;list-style:none;display:flex;align-items:center;gap:6px;transition:color .15s}
+.br2-advanced summary:hover{color:var(--txt2)}
+.br2-advanced[open] summary{color:var(--txt2);border-bottom:1px solid var(--brd)}
+.br2-adv-inner{padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+
+/* OMEGA v21 PREMIUM */
+#hdr{backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);box-shadow:0 1px 0 rgba(0,212,255,.08),0 4px 40px rgba(0,0,0,.9)}
+#logo-icon{background:linear-gradient(135deg,#0050a0,#00aaff,#00e0ff);box-shadow:0 0 24px rgba(0,180,255,.65);animation:logoPulse 3s ease-in-out infinite}
+@keyframes logoPulse{0%,100%{box-shadow:0 0 24px rgba(0,180,255,.65),0 0 50px rgba(0,100,200,.3)}50%{box-shadow:0 0 36px rgba(0,212,255,.9),0 0 70px rgba(0,150,255,.4)}}
+#logo-text{font-size:16px;font-weight:800;letter-spacing:2px;background:linear-gradient(135deg,#00d4ff,#fff,#00d4ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+#hdr-time{font-family:"Cascadia Code","Consolas",monospace;color:rgba(0,212,255,.6);background:rgba(0,212,255,.05);padding:3px 10px;border-radius:6px;border:1px solid rgba(0,212,255,.1)}
+#hdr-refresh{background:rgba(0,212,255,.07);border:1px solid rgba(0,212,255,.2);color:var(--acc);padding:5px 12px;border-radius:8px;cursor:pointer;font-size:11px;font-weight:700;transition:all .2s}
+#hdr-refresh:hover{background:rgba(0,212,255,.16);border-color:var(--acc);box-shadow:0 0 20px rgba(0,212,255,.3);transform:translateY(-1px)}
+.tab-ws-group{display:flex;align-items:stretch;border-right:1px solid rgba(255,255,255,.05);padding:0 4px}
+.tab-ws-group:last-child{border-right:none}
+.tab-ws-label{display:flex;align-items:center;padding:0 8px;font-size:10px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;white-space:nowrap;cursor:pointer;border-right:1px solid rgba(255,255,255,.04);margin-right:2px;transition:color .2s;user-select:none}
+.tab-ws-tabs{display:flex;align-items:stretch;gap:1px}
+.tab-ws-label.grp-trading{color:rgba(0,232,122,.3)}.tab-ws-label.grp-trading:hover{color:rgba(0,232,122,.8)}
+.tab-ws-label.grp-analytics{color:rgba(160,96,240,.3)}.tab-ws-label.grp-analytics:hover{color:rgba(160,96,240,.8)}
+.tab-ws-label.grp-ai{color:rgba(0,212,255,.35)}.tab-ws-label.grp-ai:hover{color:rgba(0,212,255,.9)}
+.tab-ws-label.grp-system{color:rgba(255,122,32,.3)}.tab-ws-label.grp-system:hover{color:rgba(255,122,32,.8)}
+.tab-ws-group.grp-trading .tb.on{color:#c8ffd8!important}.tab-ws-group.grp-trading .tb.on::after{background:var(--grn)}
+.tab-ws-group.grp-analytics .tb.on{color:#dcc8ff!important}.tab-ws-group.grp-analytics .tb.on::after{background:var(--pur)}
+.tab-ws-group.grp-system .tb.on{color:#ffddb8!important}.tab-ws-group.grp-system .tb.on::after{background:var(--ora)}
+#tabs{background:linear-gradient(180deg,#030812,#020608);border-bottom:1px solid rgba(0,212,255,.08);box-shadow:0 2px 20px rgba(0,0,0,.8);align-items:stretch}
+.tb{border-bottom:2px solid transparent;position:relative;letter-spacing:.2px}
+.tb::after{content:"";position:absolute;bottom:-1px;left:50%;right:50%;height:2px;background:var(--acc);transition:left .2s,right .2s;border-radius:2px 2px 0 0}
+.tb.on::after{left:0;right:0}.tb.on{color:#e8f4ff!important}
+.card{border-radius:12px;box-shadow:0 4px 32px rgba(0,0,0,.8),inset 0 1px 0 rgba(255,255,255,.04);transition:all .25s cubic-bezier(.4,0,.2,1)}
+.card:hover{border-color:rgba(0,212,255,.24);box-shadow:0 8px 48px rgba(0,0,0,.85),0 0 0 1px rgba(0,212,255,.09);transform:translateY(-2px)}
+.stat{border-radius:12px;transition:all .25s cubic-bezier(.4,0,.2,1)}
+.stat:hover{border-color:rgba(0,212,255,.2);transform:translateY(-2px);box-shadow:0 8px 40px rgba(0,0,0,.8),0 0 0 1px rgba(0,212,255,.07)}
+.sc{animation:scFadeIn .25s cubic-bezier(.4,0,.2,1)}
+@keyframes scFadeIn{from{opacity:0;transform:translateY(6px) scale(.99)}to{opacity:1;transform:none}}
+#toast-container{position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.toast{background:rgba(4,10,24,.96);border:1px solid rgba(0,212,255,.25);border-radius:12px;padding:12px 18px;font-size:12px;color:var(--txt);box-shadow:0 8px 32px rgba(0,0,0,.8);backdrop-filter:blur(20px);animation:toastIn .3s cubic-bezier(.34,1.56,.64,1);pointer-events:all;max-width:320px;display:flex;align-items:center;gap:10px}
+@keyframes toastIn{from{opacity:0;transform:translateY(20px) scale(.9)}to{opacity:1;transform:none}}
+.toast-icon{font-size:16px;flex-shrink:0}
+.toast-g{border-color:rgba(0,232,122,.35)}.toast-y{border-color:rgba(255,200,0,.35)}.toast-r{border-color:rgba(255,45,85,.35)}
+.pause-card{background:linear-gradient(135deg,rgba(255,150,0,.08),rgba(255,80,0,.05));border:1px solid rgba(255,150,0,.35);border-radius:14px;padding:14px 16px;animation:pausePulse 2.5s ease-in-out infinite}
+@keyframes pausePulse{0%,100%{box-shadow:0 4px 20px rgba(255,100,0,.15)}50%{box-shadow:0 4px 32px rgba(255,150,0,.35)}}
+.pause-card-title{font-size:11px;font-weight:800;color:var(--yel);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.pause-card-body{font-size:12px;color:var(--txt);margin-bottom:12px;line-height:1.6}
+.pause-card-actions{display:flex;gap:8px;flex-wrap:wrap}
+.pause-btn-open,.pause-btn-proceed{padding:7px 16px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:700;transition:all .15s}
+.pause-btn-open{background:rgba(0,212,255,.1);border:1px solid rgba(0,212,255,.4);color:var(--acc)}
+.pause-btn-proceed{background:rgba(0,232,122,.1);border:1px solid rgba(0,232,122,.4);color:var(--grn)}
+.pause-btn-proceed:disabled{opacity:.4;cursor:not-allowed}
+#global-loader{position:fixed;top:0;left:0;right:0;height:2px;z-index:9999;background:linear-gradient(90deg,var(--acc2),var(--acc),#00ffcc,var(--acc));background-size:200%;animation:loaderShift 1.5s linear infinite;opacity:0;transition:opacity .2s}
+@keyframes loaderShift{from{background-position:0}to{background-position:200%}}
+body.loading #global-loader{opacity:1}
+
+</style>
+</head>
+<body>
+<div id="global-loader"></div>
+<div id="toast-container"></div>
+
+<!-- ═══════════════════ HEADER ═══════════════════ -->
+<div id="hdr">
+  <div id="logo">
+    <div id="logo-icon">⚡</div>
+    <div>
+      <div id="logo-text">MaxAI</div>
+      <div id="logo-ver">Корпорация MaxAI</div>
+    </div>
+  </div>
+  <div id="hdr-chips">
+    <div class="hchip hchip-y" id="chip-svc"><span class="pulse"></span><span>ЗАГРУЗКА</span></div>
+    <div class="hchip hchip-b" id="chip-agents">— агентов</div>
+    <div class="hchip hchip-g" id="chip-tasks">— задач</div>
+    <div class="hchip hchip-b" id="chip-cost">$0.0000</div>
+    <div class="hchip hchip-g" id="chip-balance">$—</div>
+    <div class="hchip hchip-b" id="chip-pnl">PnL $0</div>
+  </div>
+  <span id="hdr-time">--:--:--</span>
+  <button id="hdr-refresh" onclick="refreshAll()">↻ Обновить</button>
+</div>
+
+<!-- TABS WORKSPACE v21 -->
+<div id="tabs">
+  <div class="tab-ws-group">
+    <div class="tab-ws-tabs">
+      <div class="tb on" onclick="go('dash')"><span class="tb-ico">🏠</span>Главная</div>
+    </div>
+  </div>
+  <div class="tab-ws-group grp-trading">
+    <div class="tab-ws-label grp-trading" title="Торговля">💹</div>
+    <div class="tab-ws-tabs">
+      <div class="tb" onclick="go('revenue')"><span class="tb-ico">💰</span>Доходы</div>
+      <div class="tb" onclick="go('services')"><span class="tb-ico">🛍</span>Услуги</div>
+      <div class="tb" onclick="go('agents')"><span class="tb-ico">🤖</span>Агенты</div>
+      <div class="tb" onclick="go('tasks')"><span class="tb-ico">📋</span>Задачи</div>
+    </div>
+  </div>
+  <div class="tab-ws-group grp-analytics">
+    <div class="tab-ws-label grp-analytics" title="Аналитика">🔮</div>
+    <div class="tab-ws-tabs">
+      <div class="tb" onclick="go('quality')"><span class="tb-ico">⭐</span>Качество</div>
+      <div class="tb" onclick="go('failures')"><span class="tb-ico">🔥</span>Инциденты</div>
+      <div class="tb" onclick="go('evolution')"><span class="tb-ico">🧬</span>Эволюция</div>
+      <div class="tb" onclick="go('platforms')"><span class="tb-ico">🌐</span>Платформы</div>
+      <div class="tb" onclick="go('skills')"><span class="tb-ico">🧠</span>Навыки</div>
+      <div class="tb" onclick="go('scout')"><span class="tb-ico">🔭</span>Скаут</div>
+    </div>
+  </div>
+  <div class="tab-ws-group grp-ai">
+    <div class="tab-ws-label grp-ai" title="ИИ">🤖</div>
+    <div class="tab-ws-tabs">
+      <div class="tb" onclick="go('llm')"><span class="tb-ico">💡</span>Модели</div>
+      <div class="tb" onclick="go('chat')"><span class="tb-ico">💬</span>Чат</div>
+    </div>
+  </div>
+  <div class="tab-ws-group grp-system">
+    <div class="tab-ws-label grp-system" title="Система">⚙️</div>
+    <div class="tab-ws-tabs">
+      <div class="tb" onclick="go('logs')"><span class="tb-ico">📜</span>Логи</div>
+      <div class="tb" onclick="go('browser')"><span class="tb-ico">🖥</span>Браузер</div>
+      <div class="tb" onclick="go('observability')"><span class="tb-ico">📊</span>Метрики</div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ═══════════════ OBSERVABILITY ════════════════════ -->
+<div id="sc-observability" class="sc">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <h2 style="margin:0;font-size:16px;color:var(--txt)">📊 MaxAI Observability</h2>
+    <button onclick="obsRefresh()" class="btn btn-sm" style="font-size:11px">⟳ Обновить</button>
+  </div>
+
+  <!-- KPIs row -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:16px" id="obs-kpis">
+    <div class="stat"><div class="loader" style="margin:6px auto"></div><div class="stat-lbl">Загрузка</div></div>
+  </div>
+
+  <!-- Services grid -->
+  <div style="background:#040c18;border:1px solid var(--brd);border-radius:10px;padding:12px;margin-bottom:12px">
+    <div style="font-size:11px;color:var(--txt3);margin-bottom:8px;font-weight:700;letter-spacing:.5px">СЕРВИСЫ</div>
+    <div id="obs-services" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px"></div>
+  </div>
+
+  <!-- Metrics raw -->
+  <div style="background:#040c18;border:1px solid var(--brd);border-radius:10px;padding:12px;margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <span style="font-size:11px;color:var(--txt3);font-weight:700;letter-spacing:.5px">PROMETHEUS METRICS</span>
+      <a href="/metrics" target="_blank" style="font-size:10px;color:var(--acc)">↗ /metrics</a>
+    </div>
+    <pre id="obs-raw" style="font-size:10px;color:#7ec8e3;background:transparent;border:none;margin:0;padding:0;white-space:pre-wrap;max-height:200px;overflow-y:auto"></pre>
+  </div>
+
+  <!-- Pending actions -->
+  <div style="background:#040c18;border:1px solid var(--brd);border-radius:10px;padding:12px">
+    <div style="font-size:11px;color:var(--txt3);margin-bottom:8px;font-weight:700;letter-spacing:.5px">ОЖИДАЮТ ПОДТВЕРЖДЕНИЯ</div>
+    <div id="obs-actions">
+      <div style="font-size:11px;color:var(--txt3);text-align:center;padding:12px">✅ Нет ожидающих действий</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ ГЛАВНАЯ ═══════════════════ -->
+<div id="sc-dash" class="sc on">
+  <div class="g5" id="dash-kpis">
+    <div class="stat"><div class="loader" style="margin:8px auto 6px"></div><div class="stat-lbl">Загрузка...</div></div>
+  </div>
+  <!-- ── Service health strip ───────────────────────────────────────── -->
+  <div id="dash-circuit" style="margin-bottom:10px"></div>
+  <div id="dash-services" style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:14px">
+    <div style="background:var(--bg2);border:1px solid var(--brd);border-radius:6px;padding:8px;text-align:center;color:var(--txt3);font-size:11px">
+      <div class="loader" style="margin:0 auto 4px"></div>Загрузка сервисов…
+    </div>
+  </div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🟢</span>Состояние подсистем</div>
+      <div id="dash-health"><div class="loading-wrap"><div class="loader"></div></div></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">📊</span>Параметры системы</div>
+      <div id="dash-params"></div>
+    </div>
+  </div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">⚡</span>KPI Корпорации MaxAI</div>
+      <div id="dash-hkpi"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🚨</span>Сигналы и тревоги</div>
+      <div id="dash-alerts"></div>
+    </div>
+  </div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">📈</span>Bybit — Открытые позиции</div>
+      <div id="dash-positions"><div class="loading-wrap"><div class="loader"></div></div></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🔮</span>Торговые сигналы (15m)</div>
+      <div id="dash-signals"><div class="loading-wrap"><div class="loader"></div></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ ДОХОДЫ ═══════════════════ -->
+<div id="sc-revenue" class="sc">
+  <div class="g4" id="rev-kpis"></div>
+
+  <!-- Real-time revenue streams from /api/revenue -->
+  <div class="g2" id="rev-streams-cards" style="margin-bottom:14px"></div>
+
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">💸</span>Все потоки доходов</div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Поток</th><th>Агент</th><th>Доход $</th><th>Статус</th></tr></thead>
+          <tbody id="rev-tbl"><tr><td colspan="4" style="text-align:center;padding:20px"><div class="loader" style="margin:0 auto"></div></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">📈</span>30-дневная история баланса</div>
+      <div id="rev-history" style="max-height:260px;overflow-y:auto"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="card-title-ico">🌍</span>Фазы глобального роста</div>
+    <div id="rev-phases"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════ УСЛУГИ ═══════════════════ -->
+<div id="sc-services" class="sc">
+  <div class="g4" id="svc-kpis"></div>
+  <div class="g2" id="svc-cards" style="margin-bottom:14px"></div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">📋</span>Заказы клиентов</div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Клиент</th><th>Услуга</th><th>Контакт</th><th>Статус</th><th>Дата</th></tr></thead>
+          <tbody id="svc-orders-tbl"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">📤</span>Новый заказ</div>
+      <label style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px">Имя клиента</label>
+      <input class="inp" id="svc-name" placeholder="Имя / Компания" style="margin-bottom:8px">
+      <label style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px">Услуга</label>
+      <select class="inp" id="svc-service" style="margin-bottom:8px">
+        <option value="">-- Выбрать услугу --</option>
+        <option value="telegram_bot_basic">Telegram Bot — 3500₽/$40</option>
+        <option value="ai_chatbot">ИИ-консультант GPT — 8000₽/$90</option>
+        <option value="trading_bot">Торговый бот — 25000₽/$280</option>
+        <option value="data_parser">Парсер данных — 5000₽/$55</option>
+        <option value="automation">Автоматизация — 12000₽/$135</option>
+        <option value="ai_agent">ИИ-агент под ключ — 35000₽/$400</option>
+      </select>
+      <label style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px">Контакт (Telegram/email)</label>
+      <input class="inp" id="svc-contact" placeholder="@username или email" style="margin-bottom:8px">
+      <label style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px">Описание задачи</label>
+      <textarea class="inp" id="svc-msg" rows="3" placeholder="Опишите что нужно..."></textarea>
+      <button class="btn btn-g" onclick="submitOrder()" style="margin-top:10px;width:100%">📤 Отправить заказ</button>
+      <div id="svc-result" style="margin-top:8px;font-size:12px"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ АГЕНТЫ ═══════════════════ -->
+<div id="sc-agents" class="sc">
+  <div class="g4" id="ag-kpis"></div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🏅</span>По уровню</div>
+      <div id="ag-rank"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🏢</span>По отделу</div>
+      <div id="ag-dept"></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title"><span class="card-title-ico">🤖</span>Весь флот агентов</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Агент</th><th>Отдел</th><th>Уровень</th><th>Качество</th><th>Статус</th><th>Описание</th></tr></thead>
+        <tbody id="ag-tbl"><tr><td colspan="6" style="text-align:center;padding:20px"><div class="loader" style="margin:0 auto"></div></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ ЗАДАЧИ ═══════════════════ -->
+<div id="sc-tasks" class="sc">
+  <div class="g4" id="task-kpis"></div>
+  <div class="card" style="margin-bottom:14px">
+    <div class="card-title"><span class="card-title-ico">📋</span>Список задач</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>ID</th><th>Агент</th><th>Описание</th><th>Статус</th><th>Источник</th><th>Обновлено</th></tr></thead>
+        <tbody id="task-tbl"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="sec-title"><span class="card-title-ico">▶</span><span>Запуск задачи через 5-слойный Pipeline</span></div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">⚙️</span>Параметры задачи</div>
+      <label style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px">Цель задачи</label>
+      <input class="inp" id="pipe-goal" placeholder="Анализ доходов..." style="margin-bottom:8px">
+      <label style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px">Теги (через запятую)</label>
+      <input class="inp" id="pipe-tags" placeholder="finance, revenue" style="margin-bottom:8px" value="general">
+      <label style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px">Промпт</label>
+      <textarea class="inp" id="pipe-prompt" rows="3" placeholder="Опишите задачу подробнее...">Проанализируй текущие потоки доходов</textarea>
+      <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-g" onclick="runPipeline()" id="pipe-btn">▶ Запустить</button>
+        <div class="fb" id="pipe-fb"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">📄</span>Результат</div>
+      <div class="logbox" id="pipe-res" style="height:160px">Результат появится здесь...</div>
+      <div style="margin-top:8px;font-size:11px;color:var(--txt3)" id="pipe-info"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ КАЧЕСТВО ═══════════════════ -->
+<div id="sc-quality" class="sc">
+  <div class="g4" id="ql-kpis"></div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">📊</span>Распределение оценок</div>
+      <div id="ql-grades"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">📝</span>Очередь улучшений</div>
+      <div id="ql-backlog"></div>
+    </div>
+  </div>
+  <div class="sec-title"><span>⏱ SLO — Соглашение об уровне сервиса</span></div>
+  <div class="g4" id="slo-kpis"></div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">⏱</span>Задержки (Latency)</div>
+      <div id="slo-lat"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🔄</span>Стадии Pipeline</div>
+      <div id="slo-pipe"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ ИНЦИДЕНТЫ ═══════════════════ -->
+<div id="sc-failures" class="sc">
+  <div class="g3" id="fail-kpis"></div>
+
+  <div class="sec-title"><span>🎛 Управление инцидентами</span></div>
+  <div class="incident-grid">
+    <div class="inc-btn inc-kill" onclick="doIncident('kill_switch')">
+      <div class="inc-ico">☠️</div>
+      <div>KILL SWITCH</div>
+      <div style="font-size:9px;opacity:.7;font-weight:400">Аварийная остановка</div>
+    </div>
+    <div class="inc-btn inc-block" onclick="doIncident('block_retries')">
+      <div class="inc-ico">🚫</div>
+      <div>ЗАБЛОК. РЕТРАИ</div>
+      <div style="font-size:9px;opacity:.7;font-weight:400">Остановить повторы</div>
+    </div>
+    <div class="inc-btn inc-roll" onclick="doIncident('rollback')">
+      <div class="inc-ico">⏪</div>
+      <div>ОТКАТ</div>
+      <div style="font-size:9px;opacity:.7;font-weight:400">Rollback к стабильной</div>
+    </div>
+    <div class="inc-btn inc-back" onclick="doIncident('switch_backup')">
+      <div class="inc-ico">🔄</div>
+      <div>РЕЗЕРВ</div>
+      <div style="font-size:9px;opacity:.7;font-weight:400">Переключить на backup</div>
+    </div>
+  </div>
+  <div id="incident-feedback" style="margin-bottom:12px"></div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="card-title"><span class="card-title-ico">🔥</span>Кластеры ошибок</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Hash</th><th>Причина</th><th>Кол-во</th><th>Серьёзность</th><th>Последний раз</th><th>Состояние</th></tr></thead>
+        <tbody id="fail-tbl"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="card-title-ico">📒</span>Журнал действий (Ledger)</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Время</th><th>Инициатор</th><th>Действие</th><th>Цель</th><th>Причина</th></tr></thead>
+        <tbody id="lgr-tbl"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ ЭВОЛЮЦИЯ ═══════════════════ -->
+<div id="sc-evolution" class="sc">
+  <div class="g4" id="ev-kpis"></div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">📋</span>Список желаний (Wishlist)</div>
+      <div id="ev-wish"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">✅</span>Созданные агенты</div>
+      <div id="ev-made"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ ПЛАТФОРМЫ ═══════════════════ -->
+<div id="sc-platforms" class="sc">
+  <div class="g4" id="pl-kpis"></div>
+  <div class="sec-title"><span>🌐 Кластеры платформ (30 адаптеров)</span></div>
+  <div class="g4" id="pl-clusters" style="margin-bottom:14px"></div>
+  <div class="card">
+    <div class="card-title"><span class="card-title-ico">🔌</span>Все адаптеры</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Платформа</th><th>Кластер</th><th>Режим</th><th>EV Оценка</th><th>API Ключ</th></tr></thead>
+        <tbody id="pl-tbl"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Registration Status -->
+  <div class="card" style="margin-top:14px">
+    <div class="card-title"><span class="card-title-ico">📋</span>Статус регистрации (20 платформ)</div>
+    <div class="g4" id="pl-reg-kpis" style="margin-bottom:10px"></div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Платформа</th><th>Статус</th><th>Заметка</th></tr></thead>
+        <tbody id="pl-reg-tbl"></tbody>
+      </table>
+    </div>
+  </div>
+  <!-- API Endpoints -->
+  <div class="card" style="margin-top:14px">
+    <div class="card-title"><span class="card-title-ico">🔗</span>MaxAI Integration API</div>
+    <div id="pl-api-list" style="padding:10px 0"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════ НАВЫКИ ═══════════════════ -->
+<div id="sc-skills" class="sc">
+  <div class="g4" id="sk-kpis"></div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🏆</span>Топ навыков по EV</div>
+      <div id="sk-top"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🏢</span>Дивизионы (Кластер C)</div>
+      <div id="sk-divs"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ СКАУТ ═══════════════════ -->
+<div id="sc-scout" class="sc">
+  <div class="g4" id="sct-kpis"></div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🗂</span>Домены исследований</div>
+      <div id="sct-domains"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">💡</span>Последние находки</div>
+      <div id="sct-finds"></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title"><span class="card-title-ico">📜</span>Лог Скаута</div>
+    <div class="logbox" id="sct-log" style="height:180px">Скаут ещё не запускался...</div>
+    <div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-g" onclick="runScout()" id="scout-btn">🔭 Запустить Скаут сейчас</button>
+      <div class="fb" id="scout-fb"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ МОДЕЛИ ИИ ═══════════════════ -->
+<div id="sc-llm" class="sc">
+  <div class="g4" id="llm-kpis"></div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🤖</span>Провайдеры ИИ</div>
+      <div id="llm-prov"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">⚙️</span>Параметры системы</div>
+      <div id="llm-sys"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ ЧАТ ═══════════════════ -->
+<div id="sc-chat" class="sc">
+  <div style="max-width:800px;margin:0 auto">
+    <div class="card" style="padding:0;overflow:hidden">
+      <div style="background:#040c18;padding:12px 16px;border-bottom:1px solid var(--brd);display:flex;align-items:center;gap:8px">
+        <span style="font-size:16px">🤖</span>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:#ddeeff">MaxAI Ассистент</div>
+          <div style="font-size:10px;color:var(--txt3)">Управляйте системой с помощью чата</div>
+        </div>
+        <div class="dot dot-g" style="margin-left:auto"></div>
+      </div>
+      <div id="chat-box"></div>
+      <div id="chat-send-row">
+        <input class="inp" id="chat-inp" placeholder="Введите сообщение... (Enter для отправки)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat()}">
+        <button class="btn btn-g" onclick="sendChat()" id="chat-btn">Отправить</button>
+      </div>
+    </div>
+        <div style="margin-top:10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:6px">
+      <button class="btn btn-sm" onclick="quickChat('помощь')">📋 Все команды</button>
+      <button class="btn btn-sm" onclick="quickChat('баланс')">💰 Баланс</button>
+      <button class="btn btn-sm" onclick="quickChat('полный статус')">📊 Статус</button>
+      <button class="btn btn-sm" onclick="quickChat('доход корпорации')">💹 Доходы</button>
+      <button class="btn btn-sm" onclick="quickChat('btc цена')">₿ BTC цена</button>
+      <button class="btn btn-sm" onclick="quickChat('список агентов')">🤖 Агенты</button>
+      <button class="btn btn-sm btn-y" onclick="quickChat('почини систему')">🔧 Авторемонт</button>
+      <button class="btn btn-sm" onclick="quickChat('Есть ли ошибки в логах?')">🚨 Ошибки</button>
+      <button class="btn btn-sm" onclick="quickChat('выполни задание: проверь все системы')">⚡ Выполнить</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ ЛОГИ ═══════════════════ -->
+<div id="sc-logs" class="sc">
+  <div class="card" style="margin-bottom:14px">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select class="inp" id="log-file" oninput="debouncedLoadLogs()" style="width:auto;min-width:180px">
+        <option value="system">system</option>
+        <option value="orchestrator">orchestrator</option>
+        <option value="maxai_ceo">maxai_ceo</option>
+        <option value="quality_guardian">quality_guardian</option>
+        <option value="the_scout">the_scout</option>
+        <option value="bybit_earn">bybit_earn</option>
+        <option value="b2b_leads">b2b_leads</option>
+        <option value="auto_loop">auto_loop</option>
+        <option value="errors">errors</option>
+      </select>
+      <input class="inp" id="log-lines" type="number" value="100" min="20" max="500" style="width:80px" oninput="debouncedLoadLogs()">
+      <span style="font-size:11px;color:var(--txt3)">строк</span>
+      <button class="btn" onclick="loadLogs()">↻ Обновить</button>
+      <button class="btn btn-sm" onclick="toggleAutolog()" id="autolog-btn">▶ Авто</button>
+      <div class="fb show" id="log-name-fb" style="background:none;border:none;color:var(--txt3)"></div>
+    </div>
+  </div>
+  <div class="logbox" id="log-out" style="height:calc(100vh - 280px);min-height:300px">Выберите файл лога...</div>
+</div>
+
+<!-- ═══════════════════ БРАУЗЕР ═══════════════════ -->
+<div id="sc-browser" class="sc">
+  <!-- ── URL Bar ─────────────────────────────────────────────── -->
+  <div style="display:flex;align-items:center;gap:6px;background:#040c18;border:1px solid var(--brd2);border-radius:10px;padding:7px 12px;margin-bottom:8px;box-shadow:0 2px 12px rgba(0,0,0,.5)">
+    <button onclick="var f=document.getElementById('br2-iframe');if(f)f.src=f.src" style="background:none;border:1px solid var(--brd);color:var(--txt3);padding:4px 9px;border-radius:6px;font-size:13px;cursor:pointer;flex-shrink:0;transition:all .15s" onmouseover="this.style.color='var(--acc)';this.style.borderColor='var(--acc)'" onmouseout="this.style.color='var(--txt3)';this.style.borderColor='var(--brd)'" title="Обновить">↺</button>
+    <input id="br2-url" type="text" placeholder="Введи URL или выбери закладку ниже…"
+      style="flex:1;background:rgba(255,255,255,.04);border:1px solid var(--brd);border-radius:7px;outline:none;color:var(--txt);font-size:12px;padding:5px 10px;transition:border-color .15s;min-width:0"
+      onfocus="this.style.borderColor='var(--acc)'" onblur="this.style.borderColor='var(--brd)'"
+      onkeydown="if(event.key==='Enter')br2Navigate()">
+    <button onclick="br2Navigate()" style="background:linear-gradient(135deg,#0090c8,var(--acc));border:none;color:#000;padding:6px 20px;border-radius:7px;font-size:12px;font-weight:800;cursor:pointer;flex-shrink:0;white-space:nowrap;box-shadow:0 0 12px rgba(0,212,255,.25)">GO →</button>
+    <div style="display:flex;align-items:center;gap:4px;font-size:10px;white-space:nowrap;flex-shrink:0">
+      <span class="dot dot-g" style="width:6px;height:6px"></span>
+      <span id="br2-status-text" style="max-width:110px;overflow:hidden;text-overflow:ellipsis;color:var(--txt3)">Система</span>
+    </div>
+  </div>
+
+  <!-- ── iframe ────────────────────────────────────────────────── -->
+  <div style="border:1px solid var(--brd2);border-radius:10px;overflow:hidden;background:#040810;margin-bottom:8px;position:relative;box-shadow:0 4px 24px rgba(0,0,0,.6)">
+    <div id="br2-loading" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:10px;z-index:10;pointer-events:none;opacity:0;transition:opacity .3s">
+      <div class="loader" style="width:28px;height:28px;border-width:3px"></div>
+      <div style="font-size:11px;color:var(--txt3)">Загрузка...</div>
+    </div>
+    <iframe id="br2-iframe" src="/cockpit-ui/" allow="fullscreen"
+      sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
+      style="width:100%;height:580px;border:none;display:block"
+      onload="var ov=document.getElementById('br2-loading');if(ov)ov.style.opacity='0'"
+      title="MaxAI Browser"></iframe>
+  </div>
+
+  <!-- ── Bookmarks bar ─────────────────────────────────────────── -->
+  <div style="background:#040c18;border:1px solid var(--brd);border-radius:10px;padding:10px 12px">
+    <div style="font-size:10px;color:var(--txt3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">
+      📌 Быстрый доступ — войди сам, MaxAI продолжит автоматически
+    </div>
+    <div id="br-bookmarks" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:8px"></div>
+        <div style="margin-top:8px;display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--brd);padding-top:7px;flex-wrap:wrap;gap:6px">
+      <span style="font-size:10px;color:var(--txt3)">💡 Внешние сайты → новая вкладка ↗. Войди, затем напиши: <b style="color:var(--acc)">«MaxAI продолжи»</b></span>
+      <button class="btn btn-sm btn-y" onclick="go('chat');setTimeout(function(){quickChat('почини систему')},120)" style="font-size:10px;padding:3px 10px;flex-shrink:0">🔧 Авторемонт</button>
+    </div>
+  </div>
+
+  <!-- ── Automation strip (compact) ────────────────────────────── -->
+  <details style="margin-top:8px">
+    <summary style="font-size:11px;color:var(--txt3);cursor:pointer;padding:6px 0">⚙️ Автоматизация браузера (для разработчиков)</summary>
+    <div style="padding:8px;background:#040c18;border:1px solid var(--brd);border-radius:8px;margin-top:4px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+        <span style="font-size:11px;color:var(--txt3)">State:</span>
+        <span id="br-state-chip" class="badge b-b">INIT</span>
+        <span id="br-owner-chip" class="badge" style="background:#0b1525;color:var(--txt3)">no owner</span>
+        <button class="btn btn-g" onclick="browserStart()" style="font-size:.76rem;padding:4px 10px">▶ Start</button>
+        <button class="btn btn-r" onclick="browserStop()" style="font-size:.76rem;padding:4px 10px">■ Stop</button>
+        <button class="btn" onclick="loadBrowser()" style="font-size:.76rem">↺ Sync</button>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <select id="br-action-select" class="inp" style="max-width:120px;font-size:.79rem">
+          <option value="screenshot">screenshot</option><option value="get_text">get_text</option>
+          <option value="click">click</option><option value="type">type</option>
+          <option value="navigate">navigate</option><option value="scroll">scroll</option>
+        </select>
+        <input id="br-action-params" type="text" value='{"selector":"","value":""}' class="inp" style="flex:1;font-size:.75rem" placeholder='{"selector":"..."}'>
+        <button class="btn" onclick="browserExecuteAction()" style="font-size:.76rem">▶ Run</button>
+      </div>
+      <div style="font-size:.7rem;color:var(--txt3);margin-top:4px">
+        Token: <code id="br-token-display" style="color:var(--yel);font-size:.68rem">--</code>
+        &nbsp;|&nbsp;URL: <span id="br-current-url" style="color:var(--txt2)">--</span>
+      </div>
+    </div>
+  </details>
+
+  <div class="card" style="margin-top:8px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <span class="card-title" style="margin:0;font-size:11px">📋 Лог</span>
+      <button class="btn" onclick="$('br-log').innerHTML=''" style="font-size:.7rem;padding:2px 6px">Очистить</button>
+    </div>
+    <div id="br-log" class="logbox" style="height:80px;min-height:40px;font-size:.72rem"></div>
+  </div>
+    <details class="br2-advanced">
+      <summary>&#9881;&#65039; Browser Automation</summary>
+      <div class="br2-adv-inner">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <span style="font-size:11px;color:var(--txt3)">State:</span>
+          <span id="br-state-chip" class="badge b-b">INIT</span>
+          <span id="br-owner-chip" class="badge" style="background:#0b1525;color:var(--txt3)">no owner</span>
+          <button class="btn btn-g" onclick="browserStart()" style="font-size:.76rem;padding:4px 10px">&#9654; Start</button>
+          <button class="btn btn-r" onclick="browserStop()" style="font-size:.76rem;padding:4px 10px">&#9632; Stop</button>
+          <button class="btn" onclick="browserAcquireLease()" style="font-size:.76rem;background:rgba(15,118,110,.2);border-color:#0f766e;color:#5eead4">Acquire Lease</button>
+          <button class="btn" onclick="browserReleaseLease()" style="font-size:.76rem">Release</button>
+          <button class="btn" onclick="browserTakeoverRequest()" style="font-size:.76rem;background:rgba(255,204,0,.1);border-color:rgba(255,204,0,.4);color:var(--yel)">Takeover</button>
+          <button class="btn" onclick="browserReconcile()" style="font-size:.76rem">Reconcile</button>
+          <button class="btn" onclick="browserRecover()" style="font-size:.76rem;background:rgba(160,96,240,.1);border-color:rgba(160,96,240,.4);color:var(--pur)">Recover</button>
+          <button class="btn" onclick="loadBrowser()" style="font-size:.76rem">&#8635; Sync</button>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <select id="br-action-select" class="inp" style="max-width:130px;font-size:.79rem">
+            <option value="inspect">inspect</option><option value="get_text">get_text</option>
+            <option value="screenshot">screenshot</option><option value="validate">validate</option>
+            <option value="scroll">scroll</option><option value="navigate">navigate</option>
+            <option value="click">click</option><option value="type">type</option>
+          </select>
+          <input id="br-action-params" type="text" value='{"selector":"","value":""}' class="inp" style="flex:1;font-size:.75rem" placeholder='{"selector":"..."}'>
+          <button class="btn" onclick="browserExecuteAction()" style="font-size:.76rem">&#9654; Run</button>
+        </div>
+        <div style="font-size:.7rem;color:var(--txt3)">
+          Token: <code id="br-token-display" style="color:var(--yel);font-size:.68rem">--</code>
+          &nbsp;|&nbsp;URL: <span id="br-current-url" style="color:var(--txt2)">--</span>
+        </div>
+      </div>
+    </details>
+  </div>
+  <div class="card" style="margin-top:12px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <span class="card-title" style="margin:0">&#128203; Лог браузера</span>
+      <button class="btn" onclick="$('br-log').innerHTML=''" style="font-size:.72rem;padding:2px 8px">Очистить</button>
+    </div>
+    <div id="br-log" class="logbox" style="height:130px;min-height:60px;font-size:.74rem"></div>
+  </div>
+</div>
+<!-- br2 legacy stubs (referenced in JS helpers) -->
+<div id="br2-urlbar" style="display:none"></div>
+<button id="br2-btn-custom" style="display:none"></button>
+<!-- hidden legacy browser-automation DOM stubs (used by JS helpers) -->
+<div id="br-banner" style="display:none"></div>
+<button id="br-back-fab" style="display:none"></button>
+<div id="br-no-screen" style="display:none"></div>
+<img id="br-screenshot" style="display:none" alt="">
+<ul id="br-checkpoints-list" style="display:none"></ul>
+<div id="br-load-overlay" style="display:none"></div>
+<input id="br-url-input" style="display:none" type="url">
+<!-- ═══════════════════ JAVASCRIPT ═══════════════════ -->
+<script>
+'use strict';
+const HYP = '/api/hyperion';
+const $ = id => document.getElementById(id);
+const esc = s => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const fmtN = v => v==null?'—':typeof v==='number'?v.toLocaleString('ru-RU'):esc(String(v));
+const fmtT = iso => { try{const d=new Date(iso);return isNaN(d)?esc(String(iso)):d.toLocaleTimeString('ru-RU');}catch{return '—';} };
+const fmtDT = iso => { try{const d=new Date(iso);return isNaN(d)?esc(String(iso)):d.toLocaleString('ru-RU');}catch{return '—';} };
+const fmtMs = v => v>1000?(v/1000).toFixed(1)+'с':Math.round(v||0)+'мс';
+const clamp = (v,a,b) => Math.min(Math.max(v||0,a),b);
+
+let curTab='dash', loaded={}, autoT=null, autologT=null;
+
+// ─── API call ──────────────────────────────────────────────────────────────
+// 800ms debounce utility
+function debounce(fn, ms) {
+  let timer;
+  return function(...args) {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn.apply(this, args), ms);
+  };
+}
+const debouncedLoadLogs = debounce(loadLogs, 800);
+
+async function api(path, opts={}) {
+  try {
+    const r = await fetch(path, {signal:AbortSignal.timeout(14000),...opts});
+    if (!r.ok) throw new Error('HTTP '+r.status+' '+r.statusText);
+    return await r.json();
+  } catch(e) {
+    console.warn('API', path, e.message);
+    return null;
+  }
+}
+
+// ─── Feedback helper ───────────────────────────────────────────────────────
+function showFb(id, msg, ok=true) {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'fb show ' + (ok ? 'fb-ok' : 'fb-err');
+  setTimeout(() => { el.className = 'fb'; }, 4000);
+}
+
+// ─── Badge / Dot helpers ───────────────────────────────────────────────────
+function bdg(t, cls='b') { return `<span class="badge b-${cls}">${esc(String(t??''))}</span>`; }
+function dot(ok) { return `<span class="dot dot-${ok?'g':'r'}"></span>`; }
+function bar(pct, cls='acc') {
+  const w = clamp(pct,0,100);
+  return `<div class="pb"><div class="pb-f pb-${cls}" style="width:${w}%"></div></div>`;
+}
+function statCard(val, lbl, sub='', cls='') {
+  return `<div class="stat ${cls}"><div class="stat-val">${esc(String(val??'—'))}</div><div class="stat-lbl">${lbl}</div>${sub?`<div class="stat-sub">${sub}</div>`:''}</div>`;
+}
+
+// ─── Clock ─────────────────────────────────────────────────────────────────
+setInterval(() => $('hdr-time').textContent = new Date().toLocaleTimeString('ru-RU'), 1000);
+
+// ─── Header refresh ────────────────────────────────────────────────────────
+async function refreshHeader() {
+  const d = (window.__ST__ && window.__ST__.brain) ? window.__ST__ : await api('/api/status');
+  window.__ST__ = null;
+  if (!d) return;
+  const ok = d.service === 'ok';
+  const chip = $('chip-svc');
+  chip.innerHTML = `<span class="pulse"></span><span>${ok?'ОНЛАЙН':'СБОЙ'}</span>`;
+  chip.className = 'hchip ' + (ok ? 'hchip-g' : 'hchip-r');
+  $('chip-agents').textContent = (d.agents_count||0) + ' агентов';
+  const t = d.tasks||{};
+  $('chip-tasks').textContent = (t.running||0) + ' активных';
+  $('chip-cost').textContent = '$'+(+(d.daily_cost_usd||0)).toFixed(4);
+  const tr = d.trading||{};
+  if (tr.balance_usdt) {
+    const bal = $('chip-balance');
+    bal.textContent = '$'+fmtN(tr.balance_usdt||0);
+    bal.className = 'hchip hchip-g';
+  }
+  const pnl = tr.daily_pnl_usdt||0;
+  const pnlEl = $('chip-pnl');
+  pnlEl.textContent = 'PnL '+(pnl>=0?'+':'')+fmtN(pnl)+'$';
+  pnlEl.className = 'hchip '+(pnl>0?'hchip-g':pnl<0?'hchip-r':'hchip-b');
+}
+window.__ST2__ = window.__ST__;
+refreshHeader();
+setInterval(refreshHeader, 20000);
+
+// ─── Tab switching ─────────────────────────────────────────────────────────
+const TABS = ['dash','revenue','services','agents','tasks','quality','failures','evolution','platforms','skills','scout','llm','chat','logs','browser'];
+
+// Russian status label map
+const RU_STATUS = {
+  'ok':              'Онлайн',
+  'error':           'Ошибка',
+  'connecting':      'Синхронизация шлюзов...',
+  'CONNECTING':      'Синхронизация автономных шлюзов...',
+  'REVENUE_ACTIVE':  'Генерация прибыли активна',
+  'REVENUE_PAUSED':  'Генерация прибыли приостановлена',
+  'MAINTENANCE':     'Техническое обслуживание',
+  'active':          'Активен',
+  'inactive':        'Неактивен',
+  'failed':          'Ошибка запуска',
+  'running':         'Выполняется',
+  'pending':         'Ожидание',
+  'completed':       'Завершено',
+};
+function ruStatus(s) { return RU_STATUS[s] || s; }
+
+function go(tab) {
+  document.querySelectorAll('.tb').forEach(el=>{ const fn=el.getAttribute('onclick')||''; el.classList.toggle('on', fn.indexOf(String.fromCharCode(39)+tab+String.fromCharCode(39))>=0); });
+  TABS.forEach(t => { const s=$('sc-'+t); if(s) s.classList.toggle('on',t===tab); });
+  // Show/hide browser back-to-chat FAB
+  const fab=$('br-back-fab');
+  if(fab) fab.classList.toggle('visible', tab==='browser');
+  curTab = tab;
+  if (!loaded[tab]) { loaded[tab]=true; loadTab(tab); }
+  clearInterval(autoT);
+  autoT = setInterval(() => { loaded[tab]=false; loaded[tab]=true; loadTab(tab); }, 30000);
+}
+function loadTab(t) {
+  const m = {
+    dash:loadDash, revenue:loadRevenue, services:loadServicesShop, agents:loadAgents, tasks:loadTasks,
+    quality:loadQuality, failures:loadFailures, evolution:loadEvolution,
+    platforms:loadPlatforms, skills:loadSkills, scout:loadScout,
+    llm:loadLLM, chat:()=>{}, logs:loadLogs, browser:loadBrowser
+  };
+  if (m[t]) m[t]();
+}
+function refreshAll() {
+  loaded[curTab] = false;
+  loaded[curTab] = true;
+  loadTab(curTab);
+  refreshHeader();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ГЛАВНАЯ
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadDash() {
+  const _sSt = window.__ST2__;
+  const _sHm = window.__HM__;
+  window.__ST2__ = null; window.__HM__ = null;
+  const [st, hm] = _sSt && _sHm
+    ? [_sSt, _sHm]
+    : await Promise.all([api('/api/status'), api(HYP+'/api/v1/overview/metrics')]);
+
+  if (st) {
+    const t = st.tasks||{};
+    $('dash-kpis').innerHTML = [
+      statCard(st.agents_count||47, 'Агентов загружено', '', 'stat-acc'),
+      statCard(t.running||0, 'Активных задач', '', 'stat-grn'),
+      statCard(t.completed||0, 'Завершено', 'всего'),
+      statCard(t.failed||0, 'С ошибками', '', t.failed>0?'stat-red':''),
+      statCard('$'+(+(st.daily_cost_usd||0)).toFixed(4), 'Расходы сегодня', 'лимит $'+st.cost_limit_usd),
+    ].join('');
+    // Trading stats block
+    const tr = st.trading||{};
+    const trPnl = tr.daily_pnl_usdt||0;
+    $('dash-kpis').innerHTML += [
+      statCard('$'+fmtN(tr.balance_usdt||0), 'Баланс Bybit', tr.online?'онлайн':'офлайн', 'stat-grn'),
+      statCard((trPnl>=0?'+':'')+fmtN(trPnl)+'$', 'PnL сегодня', (tr.daily_pnl_pct||0).toFixed(2)+'%', trPnl>=0?'stat-grn':'stat-red'),
+    ].join('');
+
+    const statusMap = {ok:'g', error:'r', degraded:'y'};
+    $('dash-params').innerHTML = [
+      ['Сервис', bdg(st.service||'?', statusMap[st.service]||'b')],
+      ['Brain', bdg(st.brain||'?', statusMap[st.brain]||'b')],
+      ['Watchdog', bdg(st.watchdog||'?', statusMap[st.watchdog]||'b')],
+      ['Автономия', bdg(st.autonomy_enabled?'включена':'выкл', st.autonomy_enabled?'g':'y')],
+      ['Groq-only', bdg(st.groq_only_mode?'ВКЛ':'ВЫКЛ', st.groq_only_mode?'y':'g')],
+      ['Уровень защиты', bdg(st.guardrail_level||0, 'b')],
+    ].map(([l,v]) => `<div class="row"><span class="row-left">${esc(l)}</span>${v}</div>`).join('');
+    // Trading status
+    const tr2 = st.trading||{};
+    $('dash-params').innerHTML += [
+      ['Bybit торговля', bdg(tr2.online?'активна':'стоп', tr2.online?'g':'r')],
+    ].map(([l,v]) => `<div class="row"><span class="row-left">${esc(l)}</span>${v}</div>`).join('');
+  }
+
+  // Load trading positions and signals
+  try {
+    const [posData, sigData] = await Promise.all([
+      api('/api/trading/positions'),
+      api('/api/trading/signals'),
+    ]);
+    // Positions
+    const positions = (posData||{}).positions||[];
+    if (positions.length > 0) {
+      $('dash-positions').innerHTML = positions.map(p => {
+        const pnlPos = (p.pnl||0) >= 0;
+        const pnlStr = (p.pnl>=0?'+':'')+fmtN(p.pnl||0);
+        return `<div class="row" style="border-bottom:1px solid var(--brd2);padding-bottom:4px;margin-bottom:4px">
+          <span class="row-left"><b style="color:${p.side==='Buy'?'var(--grn)':'var(--red)'}">${p.side==='Buy'?'▲':'▼'} ${esc(p.symbol)}</b>
+          <span style="font-size:10px;color:var(--txt3);margin-left:6px">×${p.leverage||1}x qty=${p.size||0}</span></span>
+          <span style="color:${pnlPos?'var(--grn)':'var(--red)'};font-weight:700">${pnlStr}$</span>
+        </div>
+        <div class="row" style="font-size:11px;color:var(--txt3);margin-top:-4px;margin-bottom:6px">
+          <span>Вход: ${(p.entry_price||0).toFixed(3)}</span>
+          <span>Текущ: ${(p.mark_price||0).toFixed(3)}</span>
+          <span>SL: ${(p.stop_loss||0).toFixed(3)}</span>
+          <span>TP: ${(p.take_profit||0).toFixed(3)}</span>
+        </div>`;
+      }).join('');
+    } else {
+      $('dash-positions').innerHTML = '<div style="color:var(--txt3);padding:12px;font-size:12px;text-align:center">Нет открытых позиций</div>';
+    }
+    // Signals summary
+    const sigs = (sigData||{}).signals||[];
+    if (sigs.length > 0) {
+      $('dash-signals').innerHTML = sigs.map(sym_data => {
+        const sym = sym_data.symbol||'';
+        const actionable = (sym_data.strategies||[]).filter(s => s.action!=='HOLD' && s.strength>=0.5);
+        if (actionable.length === 0) {
+          const best = (sym_data.strategies||[]).reduce((a,b) => (b.strength||0)>(a.strength||0)?b:a, {strategy:'',strength:0,reason:'HOLD'});
+          return `<div class="row"><span class="row-left" style="font-size:11px"><b>${esc(sym)}</b></span><span style="color:var(--txt3);font-size:10px">HOLD</span></div>`;
+        }
+        return actionable.map(s => `<div class="row">
+          <span class="row-left"><b style="color:${s.action==='BUY'?'var(--grn)':'var(--red)'}">${s.action} ${esc(sym)}</b>
+          <span style="font-size:10px;color:var(--txt3);margin-left:4px">${esc(s.strategy)}</span></span>
+          ${bdg((s.strength*100).toFixed(0)+'%', s.strength>=0.8?'g':'y')}
+        </div>`).join('');
+      }).join('');
+    } else {
+      $('dash-signals').innerHTML = '<div style="color:var(--txt3);padding:12px;font-size:12px;text-align:center">Нет данных сигналов</div>';
+    }
+  } catch(e) {
+    $('dash-positions').innerHTML = '<div style="color:var(--txt3);padding:8px;font-size:11px">Ошибка загрузки позиций</div>';
+  }
+
+  if (hm) {
+    const kpi=hm.kpi||{}, h=hm.subsystems_health||{}, al=hm.alert_strip||{};
+    const hp = hm.health_percent||0;
+    $('dash-health').innerHTML = Object.entries(h).map(([k,v]) => {
+      const ok = v==='GREEN';
+      const labels = {db:'База данных',amqp:'Очередь сообщ.',pipeline:'Pipeline',evolution:'Эволюция',revenue:'Доходы',quality:'Качество'};
+      return `<div class="row">
+        <span class="row-left">${dot(ok)}<span>${labels[k]||esc(k.replace(/_/g,' '))}</span></span>
+        ${bdg(ok?'ОК':v, ok?'g':'r')}
+      </div>`;
+    }).join('') || '<div style="color:var(--txt3);padding:8px;font-size:12px">Нет данных о подсистемах</div>';
+
+    $('dash-hkpi').innerHTML = [
+      ['Пропускная способность', fmtN((kpi.throughput||{}).value||0)+' з/с'],
+      ['Чистая маржа', fmtN((kpi.net_margin||{}).value||0)+'%'],
+      ['Глубина очереди', fmtN((kpi.queue_depth||{}).value||0)],
+      ['ROI токенов', fmtN((kpi.token_roi||{}).value||0)+'%'],
+      ['Здоровье системы', hp+'%'],
+    ].map(([l,v]) => `<div class="row"><span class="row-left">${esc(l)}</span><span style="color:var(--acc);font-weight:700">${v}</span></div>`).join('');
+
+    const firing = al.current_firing_incidents||0;
+    $('dash-alerts').innerHTML = `
+      ${firing>0?`<div class="alert alert-r">🚨 ${firing} активных инцидентов!</div>`:'<div class="alert alert-g">✅ Инцидентов нет</div>'}
+      <div class="row"><span class="row-left">Подавлено алертов</span>${bdg(al.active_suppressed_alerts||0,'y')}</div>
+      <div class="row"><span class="row-left">Здоровье</span>${bdg(hp+'%', hp>=100?'g':hp>=70?'y':'r')}</div>
+      ${bar(hp, hp>=100?'grn':hp>=70?'yel':'red')}
+      <div style="font-size:10px;color:var(--txt3);margin-top:3px">${hp}% подсистем в норме</div>
+    `;
+  }
+  // Load real service health indicators
+  loadServices();
+  // Independent 30s poll ? updates service strip & circuit widget between full tab refreshes
+  clearInterval(window._svcPollT);
+  window._svcPollT = setInterval(loadServices, 30000);
+}
+
+// ─── Services Catalog tab ────────────────────────────────────────────────────
+async function loadServicesShop() {
+  // Load catalog
+  const d = await api('/api/services');
+  const ko = $('svc-kpis');
+  const sc = $('svc-cards');
+  if (d && ko) {
+    const svcs = d.services || [];
+    const total = svcs.length;
+    const minP = svcs.length ? Math.min(...svcs.map(s=>s.price_usd||0)) : 0;
+    const maxP = svcs.length ? Math.max(...svcs.map(s=>s.price_usd||0)) : 0;
+    const popular = svcs.filter(s=>s.popular).length;
+    ko.innerHTML = [
+      kpi('Услуг в каталоге', total, 'g'),
+      kpi('Мин. цена', '$'+minP, 'b'),
+      kpi('Макс. цена', '$'+maxP, 'b'),
+      kpi('Популярных', popular, 'y'),
+    ].join('');
+    if (sc) {
+      sc.innerHTML = svcs.map(s => {
+        const pop = s.popular ? '<span style="background:var(--yel);color:#000;font-size:9px;padding:1px 5px;border-radius:10px;margin-left:6px">★ ХИТ</span>' : '';
+        const feats = (s.features||[]).map(f=>`<div style="font-size:10px;color:var(--txt3);margin-top:2px">• ${esc(f)}</div>`).join('');
+        return `<div class="card" style="cursor:default">
+          <div class="card-title" style="font-size:13px">${esc(s.name)}${pop}</div>
+          <div style="font-size:16px;font-weight:700;color:var(--grn);margin:6px 0">$${s.price_usd} <span style="font-size:10px;color:var(--txt3)">/ ${esc(s.price_rub||'')}₽</span></div>
+          <div style="font-size:10px;color:var(--txt3);margin-bottom:4px">⏱ ${esc(s.delivery||'')}</div>
+          ${feats}
+        </div>`;
+      }).join('');
+    }
+  } else if (ko) {
+    ko.innerHTML = kpi('Каталог', 'нет данных', 'r');
+  }
+  // Load orders
+  const od = await api('/api/services/orders');
+  const otbl = $('svc-orders-tbl');
+  if (otbl) {
+    const orders = (od && od.orders) ? od.orders : [];
+    if (!orders.length) {
+      otbl.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--txt3);font-size:11px">Нет заказов</td></tr>';
+    } else {
+      otbl.innerHTML = orders.map(o => {
+        const stCol = o.status==='completed'?'var(--grn)':o.status==='pending'?'var(--yel)':'var(--txt3)';
+        return `<tr>
+          <td>${esc(o.client_name||'—')}</td>
+          <td>${esc(o.service_name||o.service||'—')}</td>
+          <td>${esc(o.contact||'—')}</td>
+          <td style="color:${stCol}">${esc(o.status||'—')}</td>
+          <td>${esc(o.created_at||o.date||'—')}</td>
+        </tr>`;
+      }).join('');
+    }
+  }
+}
+
+// ─── Service health strip ──────────────────────────────────────────────────
+async function loadServices() {
+  const data = await api('/api/services/health');
+  if (!data) return;
+  const el = $('dash-services');
+  if (!el) return;
+  const skip = ['_ts'];
+  const cards = Object.entries(data)
+    .filter(([k]) => !skip.includes(k))
+    .map(([k, v]) => {
+      const ok = v.ok === true;
+      const warn = !ok && v.status === 'not_compiled';
+      const col = ok ? 'var(--grn)' : warn ? 'var(--yel)' : 'var(--red)';
+      const bg  = ok ? '#00d88010' : warn ? '#ffb80010' : '#ff305010';
+      const brd = ok ? '#00d88030' : warn ? '#ffb80030' : '#ff305030';
+      let extra = '';
+      if (k === 'redis_db3' && v.vault_balance !== undefined) {
+        extra = `<div style="font-size:9px;color:var(--txt3);margin-top:2px">vault: ${esc(v.vault_balance)} | cb: ${esc(v.circuit_state||'?')}</div>`;
+      }
+      return `<div style="background:${bg};border:1px solid ${brd};border-radius:6px;padding:8px 10px;cursor:default"
+        title="${esc(v.status||'?')}">
+        <div style="display:flex;align-items:center;gap:5px;margin-bottom:2px">
+          <span style="width:7px;height:7px;border-radius:50%;background:${col};flex-shrink:0;animation:${ok?'pulse 2s infinite':'none'}"></span>
+          <span style="font-size:10px;font-weight:600;color:${col}">${ok?'OK':warn?'WARN':'ERR'}</span>
+        </div>
+        <div style="font-size:11px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(v.label||k)}</div>
+        ${extra}
+      </div>`;
+    });
+  el.style.gridTemplateColumns = `repeat(${Math.min(cards.length, 5)}, 1fr)`;
+  el.innerHTML = cards.join('');
+
+  // ?? Circuit Breaker widget ?????????????????????????????????????????????
+  const db3 = data['redis_db3'];
+  const cbEl = $('dash-circuit');
+  if (cbEl && db3 && db3.ok) {
+    const state  = db3.circuit_state  || 'CLOSED';
+    const atr    = db3.current_atr    != null ? parseFloat(db3.current_atr).toFixed(3) : null;
+    const rgm    = db3.regime         || null;
+    const vault  = parseFloat(db3.vault_balance || '0');
+    const conf   = db3.confidence     != null ? parseFloat(db3.confidence).toFixed(2) : null;
+    const stCol  = state==='OPEN' ? 'var(--red)' : state==='HALF_OPEN' ? 'var(--yel)' : 'var(--grn)';
+    const stBg   = state==='OPEN' ? '#ff305010' : state==='HALF_OPEN' ? '#ffb80010' : '#00d88010';
+    const stBrd  = state==='OPEN' ? '#ff305040' : state==='HALF_OPEN' ? '#ffb80040' : '#00d88040';
+    const ico    = state==='OPEN' ? '??' : state==='HALF_OPEN' ? '??' : '??';
+    const anim   = state==='OPEN' ? 'animation:pulse 1s infinite' : state==='HALF_OPEN' ? 'animation:pulse 2s infinite' : '';
+    const lastTs = data['_ts'] ? new Date(data['_ts']*1000).toLocaleTimeString('ru-RU') : '?';
+    cbEl.innerHTML = `<div style="background:${stBg};border:1px solid ${stBrd};border-radius:8px;padding:10px 16px;display:flex;align-items:center;gap:18px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:18px;${anim}">${ico}</span>
+        <div>
+          <div style="font-size:10px;color:var(--txt3);letter-spacing:.5px">CIRCUIT BREAKER</div>
+          <div style="font-size:15px;font-weight:800;color:${stCol};letter-spacing:.5px">${state}</div>
+        </div>
+      </div>
+      ${atr!==null ? `<div><div style="font-size:10px;color:var(--txt3)">ATR (????.)</div><div style="font-size:13px;font-weight:600;color:var(--txt)">${atr}</div></div>` : ''}
+      ${rgm ? `<div><div style="font-size:10px;color:var(--txt3)">?????</div><div style="font-size:13px;font-weight:600;color:${rgm==='bull'?'var(--grn)':rgm==='bear'?'var(--red)':'var(--txt)'}">${rgm.toUpperCase()}</div></div>` : ''}
+      ${conf!==null ? `<div><div style="font-size:10px;color:var(--txt3)">???????????</div><div style="font-size:13px;font-weight:600;color:var(--txt)">${conf}</div></div>` : ''}
+      <div><div style="font-size:10px;color:var(--txt3)">Vault Balance</div><div style="font-size:13px;font-weight:700;color:var(--acc)">$${vault.toFixed(4)}</div></div>
+      <div style="margin-left:auto;text-align:right">
+        <div style="font-size:10px;color:var(--txt3)">Redis DB3 ? Alpha Feed</div>
+        <div style="font-size:10px;color:var(--txt3)">????????? ${lastTs}</div>
+      </div>
+    </div>`;
+  } else if (cbEl && db3 && !db3.ok) {
+    cbEl.innerHTML = '<div style="background:#ff305010;border:1px solid #ff305030;border-radius:8px;padding:8px 14px;font-size:11px;color:var(--red)">?? Redis DB3 ?????????? ? Circuit Breaker ?? ????????</div>';
+  }
+}
+
+// Open a URL directly in the built-in browser tab
+function openInBrowser(url) {
+  go('browser');
+  const inp = $('br-url-input');
+  if (inp) inp.value = url;
+  if (typeof browserNavigate === 'function') browserNavigate();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ДОХОДЫ
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadRevenue() {
+  // Load real revenue data from /api/revenue
+  const [rv, hyp] = await Promise.all([
+    api('/api/revenue'),
+    api(HYP+'/api/v1/revenue/radar').catch(()=>null)
+  ]);
+
+  if (!rv && !hyp) { showNoData(['rev-kpis','rev-tbl','rev-phases']); return; }
+
+  const streams = rv ? rv.streams || {} : {};
+  const tr = streams.trading || {};
+  const fl = streams.freelance || {};
+  const b2b = streams.b2b || {};
+  const sg = streams.signals || {};
+  const earn = streams.earn || {};
+
+  const bal = +(tr.balance_usdt || 0);
+  const pnl = +(tr.daily_pnl || 0);
+  const b2bRev = +(b2b.revenue_usd || 0);
+  const earnDaily = +(earn.daily_yield_10pct || 0);
+  const earnMonthly = earnDaily * 30;
+  const freelanceMonthly = 400;
+  const tradingMonthly = bal * 0.005 * 30;
+  const totalMonthly = tradingMonthly + freelanceMonthly + earnMonthly + b2bRev;
+  const allStreams = Object.keys(streams).length;
+
+  $('rev-kpis').innerHTML = [
+    statCard('$'+bal.toFixed(2), 'Баланс USDT', '', 'stat-grn'),
+    statCard('$'+totalMonthly.toFixed(0)+'/мес', 'Прогноз дохода', '', 'stat-yel'),
+    statCard(allStreams, 'Потоков активно', '', 'stat-acc'),
+    statCard('$'+earnDaily.toFixed(4), 'Earn/день', '', 'stat-grn'),
+  ].join('');
+
+  // Real-time stream cards
+  const streamCards = [
+    { icon:'📈', name:'Trading Bot', extra:`Режим: ${tr.mode||'?'} | PnL: $${pnl.toFixed(4)}`, val:`$${bal.toFixed(2)}`, sub:'Баланс USDT', ok:!tr.error },
+    { icon:'💼', name:'Freelance Scanner', extra:`Лидов: ${fl.total_leads||0}`, val:`${fl.total_leads||0}`, sub:'Найдено лидов', ok:!fl.error },
+    { icon:'🏢', name:'B2B Pipeline', extra:`Конверт: ${b2b.converted||0}/${b2b.total_leads||0}`, val:`$${b2bRev.toFixed(0)}`, sub:'Выручка', ok:!b2b.error },
+    { icon:'📡', name:'Сигналы', extra:`Опубл: ${sg.posted||0}`, val:`${sg.posted||0}`, sub:'Сигналов', ok:!sg.error },
+    { icon:'💰', name:'Bybit Earn', extra:`@10% APY ~ $${earnMonthly.toFixed(2)}/мес`, val:`$${earnDaily.toFixed(4)}`, sub:'Доход/день', ok:!earn.error },
+  ];
+  if($('rev-streams-cards')) $('rev-streams-cards').innerHTML = streamCards.map(sc => `
+    <div class="card" style="border-left:3px solid ${sc.ok?'var(--grn)':'var(--red)'}">
+      <div class="card-title"><span class="card-title-ico">${sc.icon}</span>${esc(sc.name)}</div>
+      <div style="font-size:22px;font-weight:700;color:var(--grn);margin:6px 0">${esc(sc.val)}</div>
+      <div style="font-size:11px;color:var(--txt3)">${esc(sc.sub)}</div>
+      <div style="font-size:11px;color:var(--txt2);margin-top:4px">${esc(sc.extra)}</div>
+      <div style="margin-top:4px">${bdg(sc.ok?'LIVE':'ERROR',sc.ok?'g':'r')}</div>
+    </div>`).join('');
+
+  // Main streams table
+  const allRowData = [
+    ['📈 Trading Bot', tr.mode||'LIVE', tradingMonthly, tr.error?'ERROR':'ACTIVE'],
+    ['💼 Freelance', `${fl.total_leads||0} лидов`, freelanceMonthly, fl.error?'ERROR':'ACTIVE'],
+    ['🏢 B2B Pipeline', `${b2b.converted||0} конверт.`, b2bRev, b2b.error?'ERROR':'ACTIVE'],
+    ['📡 Сигналы', `${sg.posted||0} опубл.`, 0, sg.error?'ERROR':'ACTIVE'],
+    ['💰 Bybit Earn', '@10% APY', earnMonthly, earn.error?'ERROR':'ACTIVE'],
+  ];
+  $('rev-tbl').innerHTML = allRowData.map(([n,a,v,st]) => `<tr>
+    <td><b style="color:var(--acc)">${n}</b></td>
+    <td style="font-size:11px;color:var(--txt3)">${a}</td>
+    <td style="color:var(--grn);font-weight:700">$${(+v).toFixed(0)}</td>
+    <td>${bdg(st, st==='ACTIVE'?'g':st==='SETUP'?'y':'r')}</td>
+  </tr>`).join('');
+
+  // Balance history
+  const hist = rv ? (rv.history||[]).slice(-14).reverse() : [];
+  if($('rev-history')) {
+    $('rev-history').innerHTML = hist.length ? `<table style="width:100%;font-size:11px">
+      <thead><tr><th>Дата</th><th>Баланс</th><th>PnL</th><th>Лиды</th></tr></thead>
+      <tbody>${hist.map(h=>`<tr>
+        <td style="color:var(--txt3)">${(h.ts||'').slice(0,10)}</td>
+        <td style="color:var(--grn);font-weight:600">$${(+(h.balance||0)).toFixed(2)}</td>
+        <td style="${(+(h.pnl||0))>=0?'color:var(--grn)':'color:var(--red)'}">${(+(h.pnl||0)>=0?'+':'')+(+(h.pnl||0)).toFixed(4)}</td>
+        <td style="color:var(--txt2)">${h.freelance_leads||0}</td>
+      </tr>`).join('')}</tbody>
+    </table>` : '<div style="padding:20px;text-align:center;color:var(--txt3)">История появится после первого дневного отчёта</div>';
+  }
+
+  const phases = [
+    {n:'Фаза 1 — Россия/Казахстан/Беларусь/Украина', target:1000},
+    {n:'Фаза 2 — Глобальный английский рынок', target:5000},
+    {n:'Фаза 3 — APAC (Азия-Пацифик)', target:20000},
+  ];
+  $('rev-phases').innerHTML = phases.map(p => {
+    const t = p.target;
+    const pg = Math.min(totalMonthly / t * 100, 100);
+    const cls = pg>=100?'grn':pg>=50?'yel':'acc';
+    return `<div class="phase-item">
+      <div class="phase-head"><span class="phase-name">${p.n}</span><span class="phase-target">$${fmtN(t)}/мес</span></div>
+      ${bar(pg,cls)}
+      <div class="phase-pct">${pg.toFixed(1)}% от цели — прогноз $${totalMonthly.toFixed(0)}/мес</div>
+    </div>`;
+  }).join('');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  АГЕНТЫ
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadAgents() {
+  const [lo, lh] = await Promise.all([api('/api/agents'), api(HYP+'/api/v1/agents/fleet')]);
+  const fleet = lh?(lh.fleet||[]):(lo?(lo.agents||[]):[]);
+  const total = lh?lh.total_agents:fleet.length;
+  const byR = lh?(lh.by_rank||{}):{};
+  const byD = lh?(lh.by_department||{}):{};
+  const avgQ = lh?(lh.avg_quality||0):0;
+
+  $('ag-kpis').innerHTML = [
+    statCard(total||0,'Всего агентов','','stat-acc'),
+    statCard(avgQ,'Ср. качество','/100',avgQ>=80?'stat-grn':''),
+    statCard(byR.ELITE||0,'Элитных','уровень ELITE','stat-pur'),
+    statCard(Object.keys(byD).length,'Отделов','',''),
+  ].join('');
+
+  const rCls = {ELITE:'p',SENIOR:'b',MID:'g',JUNIOR:'y'};
+  const rName = {ELITE:'Элита',SENIOR:'Старший',MID:'Средний',JUNIOR:'Новичок'};
+  $('ag-rank').innerHTML = Object.entries(byR).map(([r,n]) =>
+    `<div class="row"><span class="row-left">${bdg(rName[r]||r, rCls[r]||'b')}</span><b style="color:#ddeeff;font-size:14px">${n}</b></div>`
+  ).join('') || '<div style="color:var(--txt3);padding:10px;font-size:12px">Данные по уровням недоступны</div>';
+
+  $('ag-dept').innerHTML = Object.entries(byD).map(([dep,n]) =>
+    `<div class="row"><span class="row-left">${esc(dep)}</span><span style="color:var(--acc);font-weight:700">${n}</span></div>`
+  ).join('') || '<div style="color:var(--txt3);padding:10px;font-size:12px">Данные по отделам недоступны</div>';
+
+  $('ag-tbl').innerHTML = fleet.slice(0,120).map(a => {
+    const q = +(a.quality_score||0);
+    const qc = q>=90?'#00d880':q>=75?'#3ab8e8':q>=60?'#ffb800':'#ff3050';
+    return `<tr>
+      <td style="font-family:'Consolas',monospace;font-size:11px;color:#ddeeff">${esc(a.name||a.file||'?')}</td>
+      <td style="font-size:11px;color:var(--txt2)">${esc(a.department||'—')}</td>
+      <td>${bdg(rName[a.rank]||a.rank||'MID', rCls[a.rank||'MID']||'b')}</td>
+      <td><span style="color:${qc};font-weight:700">${q||'—'}</span></td>
+      <td>${bdg(a.status==='active'?'активен':a.status||'?', a.status==='active'?'g':'y')}</td>
+      <td style="font-size:11px;color:var(--txt3);max-width:200px">${esc((a.desc||a.schedule||'—').slice(0,50))}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--txt3)">Нет данных о флоте агентов</td></tr>';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ЗАДАЧИ
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadTasks() {
+  // Try local queue first, fallback to tasks API
+  const d = await api('/api/tasks/queue').catch(()=>null) || await api('/api/tasks').catch(()=>null);
+  if (!d) return;
+  const tasks = d.tasks||[], st = {pending: d.pending||0, running:0, completed:0, failed:0, ...(d.stats||{})};
+  $('task-kpis').innerHTML = [
+    statCard(tasks.length,'Задач всего','',''),
+    statCard(st.running||0,'Активных','','stat-grn'),
+    statCard(st.completed||0,'Завершено','','stat-acc'),
+    statCard(st.failed||0,'Ошибок','',st.failed>0?'stat-red':''),
+  ].join('');
+
+  const stMap = {running:'g',completed:'b',failed:'r',pending:'y'};
+  const stName = {running:'активна',completed:'завершена',failed:'ошибка',pending:'ожидание'};
+  $('task-tbl').innerHTML = tasks.slice(0,60).map(t => `<tr>
+    <td style="font-family:'Consolas',monospace;font-size:10px;color:var(--txt3)">${esc((t.id||'').slice(0,18))}</td>
+    <td style="font-size:11px;color:var(--acc)">${esc(t.agent||'—')}</td>
+    <td style="max-width:240px;font-size:11px">${esc((t.description||'').slice(0,70))}</td>
+    <td>${bdg(stName[t.status]||t.status||'?', stMap[t.status]||'y')}</td>
+    <td style="font-size:11px;color:var(--txt3)">${esc(t.source||'—')}</td>
+    <td style="font-size:11px;color:var(--txt3);white-space:nowrap">${fmtT(t.updated_at||t.created_at)}</td>
+  </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--txt3)">Задач пока нет</td></tr>';
+}
+
+async function runPipeline() {
+  const goal = $('pipe-goal').value.trim() || 'Общий анализ';
+  const tagsRaw = $('pipe-tags').value.trim() || 'general';
+  const tags = tagsRaw.split(',').map(s=>s.trim()).filter(Boolean);
+  const prompt = $('pipe-prompt').value.trim() || goal;
+  const btn = $('pipe-btn');
+  btn.disabled = true; btn.textContent = '⏳ Выполняется...';
+  $('pipe-res').textContent = 'Выполняется pipeline...';
+  $('pipe-info').textContent = '';
+
+  const r = await api(HYP+'/api/v2/pipeline/run',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({task_id:'ui_'+Date.now(), goal, tags, prompt})
+  });
+
+  btn.disabled = false; btn.textContent = '▶ Запустить';
+  if (!r) { showFb('pipe-fb','Ошибка выполнения',false); $('pipe-res').textContent='Ошибка: нет ответа от сервера'; return; }
+
+  const ok = r.status === 'completed';
+  showFb('pipe-fb', ok?'✓ Успешно':'⚠ '+r.status, ok);
+  $('pipe-info').textContent = `Статус: ${r.status} | Время: ${r.elapsed_ms||0}мс | Навыки: ${(r.skills_used||[]).join(', ')||'—'}`;
+  $('pipe-res').textContent = JSON.stringify(r, null, 2);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  КАЧЕСТВО + SLO
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadQuality() {
+  // Try Hyperion first, fallback to local /api/quality
+  let [ql,sl] = await Promise.all([
+    api(HYP+'/api/v1/quality/lab').catch(()=>null),
+    api(HYP+'/api/v1/task-flow/slo').catch(()=>null)
+  ]);
+  // Fallback to local quality API
+  if (!ql) { ql = await api('/api/quality').catch(()=>null); }
+
+  if (ql) {
+    const g=ql.grade_distribution||{}, bl=ql.improvement_backlog||[];
+    const avg=ql.avg_score||0;
+    $('ql-kpis').innerHTML = [
+      statCard(avg,'Средний балл','/100',avg>=80?'stat-grn':avg>=60?'':'stat-red'),
+      statCard(ql.agents_audited||0,'Проверено агентов',''),
+      statCard(bl.length,'В очереди улучш.',''),
+      statCard(ql.last_audit==='never'?'Нет':fmtT(ql.last_audit),'Последний аудит',''),
+    ].join('');
+
+    const gcls = {A:'g',B:'b',C:'y',D:'r',F:'r'};
+    const gname = {A:'Отлично',B:'Хорошо',C:'Удовлетворит.',D:'Плохо',F:'Провал'};
+    $('ql-grades').innerHTML = Object.entries(g).map(([gr,n]) => {
+      const p = ql.agents_audited?Math.round(n/ql.agents_audited*100):0;
+      return `<div style="margin-bottom:12px">
+        <div class="row">
+          <span class="row-left"><span class="grade-${gr.toLowerCase()}">${gr}</span><span style="font-size:12px"> — ${gname[gr]||gr}</span></span>
+          <b style="color:#ddeeff">${n} (${p}%)</b>
+        </div>
+        ${bar(p, gr==='A'||gr==='B'?'grn':gr==='C'?'yel':'red')}
+      </div>`;
+    }).join('') || '<div class="alert alert-b">ℹ Аудит ещё не проводился. Quality Guardian запускается каждые 6 часов.</div>';
+
+    $('ql-backlog').innerHTML = bl.slice(0,12).map(i =>
+      `<div class="row"><span class="row-left" style="font-size:11px">${esc(i.agent||String(i))}</span>${bdg(i.priority==='high'?'высокий':i.priority==='low'?'низкий':'средний',i.priority==='high'?'r':'y')}</div>`
+    ).join('') || '<div class="alert alert-g">✅ Очередь пуста — все агенты в порядке</div>';
+  }
+
+  if (sl) {
+    const s=sl.slo_status||{}, pipe=sl.pipeline||{};
+    const p95 = s.p95_latency_ms||0, tgt = sl.slo_target_p95_ms||1500;
+    $('slo-kpis').innerHTML = [
+      statCard(fmtMs(s.p50_latency_ms||0),'Медиана (P50)','цель: 500мс'),
+      statCard(fmtMs(p95),'Перцентиль P95',sl.slo_breach?'⚠ НАРУШЕНИЕ SLO':'в норме',p95>tgt?'stat-red':'stat-grn'),
+      statCard(fmtMs(s.p99_latency_ms||0),'Перцентиль P99',''),
+      statCard((sl.throughput_tasks_per_min||0).toFixed(2),'Задач/минуту',''),
+    ].join('');
+
+    $('slo-lat').innerHTML = [
+      {l:'P50',v:s.p50_latency_ms||0,t:500,n:'Медиана'},
+      {l:'P95',v:p95,t:tgt,n:'95-й перц.'},
+      {l:'P99',v:s.p99_latency_ms||0,t:tgt*2,n:'99-й перц.'}
+    ].map(p => {
+      const pct=clamp(p.t>0?p.v/p.t*100:0,0,100), c=pct<70?'grn':pct<90?'yel':'red';
+      return `<div style="margin-bottom:12px">
+        <div class="row"><span class="row-left"><b>${p.l}</b> ${p.n}</span><span style="color:#ddeeff;font-weight:700">${fmtMs(p.v)}</span></div>
+        ${bar(pct,c)}<div style="font-size:10px;color:var(--txt3);margin-top:3px">цель: ${fmtMs(p.t)} | ${pct.toFixed(0)}%</div>
+      </div>`;
+    }).join('');
+
+    $('slo-pipe').innerHTML = Object.entries(pipe).map(([k,v]) =>
+      `<div class="row"><span class="row-left">${esc(k)}</span><span style="color:var(--acc)">${fmtN(v)}</span></div>`
+    ).join('') || '<div style="color:var(--txt3);padding:10px;font-size:12px">Нет данных Pipeline</div>';
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ИНЦИДЕНТЫ
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadFailures() {
+  const [fc,lg] = await Promise.all([
+    api(HYP+'/api/v1/failures/clusters'),
+    api(HYP+'/api/v1/ledger')
+  ]);
+
+  if (fc) {
+    const cl=fc.clusters||[], active=cl.filter(c=>!c.suppressed).length;
+    $('fail-kpis').innerHTML = [
+      statCard(fc.total||0,'Кластеров ошибок','',fc.total>0?'stat-red':''),
+      statCard(active,'Активных','','',active>0?'stat-red':''),
+      statCard(fc.alert_governor_active?'ВКЛ':'ВЫКЛ','Управление алертами','',fc.alert_governor_active?'stat-yel':''),
+    ].join('');
+
+    $('fail-tbl').innerHTML = cl.map(c => {
+      const sv=+(c.severity_score||0), sc=sv>0.7?'r':sv>0.4?'y':'g';
+      return `<tr>
+        <td style="font-family:'Consolas',monospace;font-size:10px;color:var(--txt3)">${esc((c.cluster_hash||'').slice(0,20))}</td>
+        <td style="font-size:11px;max-width:180px">${esc((c.root_cause_shortlist||c.root_cause||'—').slice(0,60))}</td>
+        <td style="color:var(--acc);font-weight:700">${c.hit_count||0}</td>
+        <td>${bdg(sv.toFixed(2),sc)}</td>
+        <td style="font-size:11px;color:var(--txt3)">${fmtDT(c.last_seen)}</td>
+        <td>${bdg(c.suppressed?'подавлен':'активен',c.suppressed?'b':'r')}</td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--txt3)">✅ Кластеров ошибок нет — система стабильна</td></tr>';
+  }
+
+  if (lg) {
+    const entries=lg.entries||[];
+    const actMap={'kill_switch':'Kill Switch','block_retries':'Блок ретраев','rollback':'Откат','switch_backup':'Резерв'};
+    $('lgr-tbl').innerHTML = entries.map(e => `<tr>
+      <td style="font-size:10px;color:var(--txt3);white-space:nowrap">${fmtDT(e.ts)}</td>
+      <td>${bdg(esc(e.initiator||'?'),'b')}</td>
+      <td>${bdg(actMap[e.action_type]||esc(e.action_type||'?'),e.action_type==='kill_switch'?'r':'g')}</td>
+      <td style="font-size:11px;font-family:'Consolas',monospace">${esc(e.target||'—')}</td>
+      <td style="font-size:11px;color:var(--txt3);max-width:180px">${esc((e.reason||'').slice(0,60))}</td>
+    </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;padding:14px;color:var(--txt3)">Журнал пуст</td></tr>';
+  }
+}
+
+async function doIncident(action) {
+  const actionNames = {kill_switch:'KILL SWITCH',block_retries:'Блокировка ретраев',rollback:'Откат',switch_backup:'Переключение на резерв'};
+  const fb = $('incident-feedback');
+  fb.innerHTML = `<div class="alert alert-b">⏳ Выполняется: ${actionNames[action]||action}...</div>`;
+
+  const r = await api(HYP+'/api/v1/incidents/action',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action, target:'all', reason:'ручное управление из панели'})
+  });
+
+  if (r) {
+    fb.innerHTML = `<div class="alert alert-g">✅ Выполнено: ${actionNames[action]||action} — ${r.status||'ok'}</div>`;
+    setTimeout(() => { loaded.failures=false; loadFailures(); }, 1000);
+  } else {
+    fb.innerHTML = `<div class="alert alert-r">❌ Ошибка выполнения команды ${actionNames[action]||action}</div>`;
+  }
+  setTimeout(() => fb.innerHTML='', 5000);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ЭВОЛЮЦИЯ
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadEvolution() {
+  const d = await api(HYP+'/api/v1/evolution/arena');
+  if (!d) return;
+  const wl=d.wishlist||[], cr=d.recently_created||[];
+
+  $('ev-kpis').innerHTML = [
+    statCard(d.factory_created||0,'Создано агентов','','stat-grn'),
+    statCard(d.factory_wishlist||0,'В списке желаний',''),
+    statCard(d.autonomy_level||0,'Уровень автономии','/10','stat-acc'),
+    statCard(d.canary_deployments||0,'Canary деплоев',''),
+  ].join('');
+
+  $('ev-wish').innerHTML = wl.slice(0,10).map(w =>
+    `<div class="row"><span class="row-left" style="font-size:11px">${esc(w.name||w.class||String(w))}</span>${bdg('P'+(w.priority||1),'b')}</div>`
+  ).join('') || '<div style="color:var(--txt3);padding:10px;font-size:12px">Список желаний пуст</div>';
+
+  $('ev-made').innerHTML = cr.slice(0,10).map(a =>
+    `<div class="row"><span class="row-left" style="color:var(--grn);font-size:11px">✓ ${esc(a.name||String(a))}</span>${bdg('создан','g')}</div>`
+  ).join('') || '<div style="color:var(--txt3);padding:10px;font-size:12px">Ни одного агента ещё не создано</div>';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ПЛАТФОРМЫ
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadPlatforms() {
+  const d = window.__PL__ || await api(HYP+'/api/v2/fleet/control');
+  window.__PL__ = null;
+  if (!d) return;
+  const adp=d.adapters||[], cl=d.clusters||[];
+
+  $('pl-kpis').innerHTML = [
+    statCard(d.total_adapters||0,'Адаптеров всего','','stat-acc'),
+    statCard(d.live_count||0,'Подключено','Live режим','stat-grn'),
+    statCard((d.total_adapters||0)-(d.live_count||0),'В режиме Mock','тестовый режим'),
+    statCard((d.graph||{}).active_skills||30,'Навыков в графе','Skill Graph'),
+  ].join('');
+
+  const clusterNames = {A:'Труд (Labor)',B:'DePIN',C:'Дивизионы',D:'Discovery'};
+  $('pl-clusters').innerHTML = cl.map(c => `<div class="card" style="padding:14px">
+    <div style="font-size:10px;color:var(--txt3);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Кластер ${esc(c.cluster)}</div>
+    <div style="font-size:14px;font-weight:700;color:#ddeeff;margin-bottom:2px">${esc(clusterNames[c.cluster]||c.name)}</div>
+    <div style="font-size:24px;font-weight:800;color:var(--acc);margin:6px 0">${c.total}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+      ${bdg(c.live_connections+' live','g')} ${bdg(c.mock_mode+' mock','y')}
+    </div>
+    ${bar(c.readiness_pct||0,'acc')}
+    <div style="font-size:10px;color:var(--txt3);margin-top:3px">${(c.readiness_pct||0).toFixed(0)}% подключено</div>
+  </div>`).join('');
+
+  $('pl-tbl').innerHTML = adp.map(a => `<tr>
+    <td style="font-family:'Consolas',monospace;color:var(--acc);font-weight:700">${esc(a.id)}</td>
+    <td>${bdg('C'+a.cluster,'b')}</td>
+    <td>${bdg(a.mock?'Mock':'Live',a.mock?'y':'g')}</td>
+    <td style="font-weight:700;color:${(+a.ev||0)>0.8?'var(--grn)':(+a.ev||0)>0.5?'var(--acc)':'var(--yel)'}">${a.ev||'—'}</td>
+    <td>${a.key_set?bdg('Ключ есть','g'):bdg('Нет ключа','y')}</td>
+  </tr>`).join('');
+
+
+  // Registration status section
+  const pd = await api('/api/v1/platforms');
+  if (pd) {
+    const s = pd.summary || {};
+    $('pl-reg-kpis').innerHTML = [
+      statCard(s.ok||0,'Зарегистрировано','платформ','stat-grn'),
+      statCard(s.pending||0,'Ожидают верификации','email verify'),
+      statCard(s.not_done||0,'Не готовы','нужна работа'),
+      statCard((pd.assets||[]).length,'Content assets','файлов'),
+    ].join('');
+
+    const stColors = {
+      logged_in:'g', registered:'g', already_exists:'g', bot_created:'g', agent_created:'g',
+      verify_email:'y', partial:'y', login_attempted:'y',
+      no_form_found:'r', captcha_blocked:'r', error:'r', unknown:'r', not_started:'r'
+    };
+    const stLabels = {
+      logged_in:'✅ Залогинен', registered:'✅ Зарег.', already_exists:'✅ Аккаунт есть',
+      bot_created:'✅ Бот создан', agent_created:'✅ Агент создан',
+      verify_email:'📧 Верифик.', partial:'⏳ Частично', login_attempted:'⏳ Вход попытка',
+      no_form_found:'❌ Форма не найдена', captcha_blocked:'⛔ Каптча', error:'❌ Ошибка',
+      unknown:'❓ Неизвестно', not_started:'⬜ Не начато'
+    };
+    $('pl-reg-tbl').innerHTML = (pd.platforms||[]).map(p => `<tr>
+      <td style="font-family:'Consolas',monospace;font-weight:700;color:var(--acc)">${esc(p.name)}</td>
+      <td>${bdg(stLabels[p.status]||p.status, stColors[p.status]||'r')}</td>
+      <td style="font-size:11px;color:var(--txt3)">${esc((p.note||'').toString().slice(0,50))}</td>
+    </tr>`).join('');
+
+    $('pl-api-list').innerHTML = (pd.api_endpoints||[]).map(ep =>
+      `<div style="font-family:'Consolas',monospace;font-size:12px;padding:3px 0;color:var(--acc)">${esc(ep)}</div>`
+    ).join('') + '<div style="font-size:11px;color:var(--txt3);margin-top:8px">Все endpoints: POST /api/v1/webhook, /ai, /lead | GET /api/v1/packs, /manifest, /status</div>';
+  }
+
+}
+
+
+  // Registration status section
+
+async function loadSkills() {
+  const d = await api(HYP+'/api/v2/skillgraph');
+  if (!d) return;
+  const g=d.skill_graph||{}, dv=d.divisions||{}, top=d.top_ev_opportunities||[];
+  const pipe=(d.pipeline||{}).strategic||{};
+
+  $('sk-kpis').innerHTML = [
+    statCard(g.total_skills||0,'Навыков в графе','','stat-acc'),
+    statCard(g.active_skills||0,'Активных','','stat-grn'),
+    statCard(Object.keys(dv).length,'Дивизионов','Кластер C'),
+    statCard('$'+(pipe.budget_remaining_usd||50),'Бюджет сегодня','осталось'),
+  ].join('');
+
+  $('sk-top').innerHTML = top.slice(0,12).map((s,i) => {
+    const ev=+(s.ev||0), ec=ev>0.8?'var(--grn)':ev>0.6?'var(--acc)':'var(--yel)';
+    return `<div class="skill-item">
+      <span class="skill-rank">${i+1}</span>
+      <span class="skill-name">${esc(s.id||'?')}</span>
+      <span class="skill-ev" style="color:${ec}">${s.ev}</span>
+    </div>`;
+  }).join('') || '<div style="color:var(--txt3);padding:10px;font-size:12px">Загрузка данных...</div>';
+
+  const divNames={div_revenue:'Доходы',div_content:'Контент',div_media:'Медиа',div_website:'Сайты',div_social:'Соцсети',div_finance:'Финансы',div_hr:'HR',div_infra:'Инфраструктура'};
+  $('sk-divs').innerHTML = Object.entries(dv).map(([n,h]) => {
+    const av=h.agents_available||0, tot=h.agents_total||1, p=Math.round(av/tot*100);
+    return `<div class="row"><span class="row-left">${esc(divNames[n]||n.replace('div_',''))}</span>${bdg(p+'%',p>80?'g':'y')}</div>`;
+  }).join('') || '<div style="color:var(--txt3);padding:10px">Нет данных</div>';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  СКАУТ
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadScout() {
+  const d = await api(HYP+'/api/v2/scout/status');
+  if (!d) return;
+  const lr=d.latest_run||{}, doms=d.research_domains||[];
+
+  $('sct-kpis').innerHTML = [
+    statCard(d.db_skill_nodes||0,'Skill Nodes в БД','','stat-acc'),
+    statCard(d.scout_findings_total||0,'Находок сохранено','',''),
+    statCard(doms.length,'Доменов исследований','',''),
+    statCard(lr.opportunities||0,'Возможностей найдено','в последнем прогоне','stat-grn'),
+  ].join('');
+
+  const domRu = {saas:'SaaS продукты',b2b_automation:'B2B автоматизация',ai_agents:'AI агенты',depin:'DePIN',freelance:'Фриланс',crypto:'Крипто',content:'Контент',lead_gen:'Лиды'};
+  $('sct-domains').innerHTML = doms.map(d =>
+    `<div class="row"><span class="row-left" style="font-family:'Consolas',monospace;font-size:11px">${esc(domRu[d]||d)}</span>${bdg('запланирован','b')}</div>`
+  ).join('') || '<div style="color:var(--txt3);padding:10px">Нет доменов</div>';
+
+  const fs=lr.findings_summary||[];
+  $('sct-finds').innerHTML = fs.length?fs.map(f =>
+    `<div style="margin-bottom:12px;padding:10px;background:#030810;border-radius:var(--r2);border-left:3px solid var(--acc)">
+      <div style="color:var(--acc);font-size:11px;font-weight:700;margin-bottom:4px">${esc(domRu[f.domain]||f.domain||'')}</div>
+      <div style="color:var(--txt2);font-size:11px">${esc(f.recommendation||'')}</div>
+    </div>`
+  ).join('') : `<div style="color:var(--txt3);padding:10px;font-size:12px">Следующий запуск: <span style="font-family:'Consolas',monospace;color:var(--acc)">${esc(d.scout_cron||'02:00 ежедневно')}</span></div>`;
+
+  const logEl = $('sct-log');
+  logEl.textContent = (d.log_tail||[]).join('\n') || 'Скаут ещё не запускался.';
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+async function runScout() {
+  const btn = $('scout-btn');
+  btn.disabled = true; btn.textContent = '⏳ Запуск...';
+  const r = await api(HYP+'/api/v2/scout/run',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  btn.disabled = false; btn.textContent = '🔭 Запустить Скаут сейчас';
+  if (r) {
+    showFb('scout-fb','✓ Скаут запущен — результаты через ~30с',true);
+    setTimeout(() => { loaded.scout=false; loadScout(); }, 35000);
+  } else {
+    showFb('scout-fb','❌ Ошибка запуска',false);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  МОДЕЛИ ИИ
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadLLM() {
+  const [llm,st] = await Promise.all([api('/api/llm'), api('/api/status')]);
+  if (!llm) { $('llm-prov').innerHTML='<div class="alert alert-r">Нет данных о моделях</div>'; return; }
+
+  const provs = Object.entries(llm);
+  const active = provs.filter(([,v])=>v&&(typeof v!=='object'||v.available!==false)).length;
+  $('llm-kpis').innerHTML = [
+    statCard(provs.length,'Провайдеров','',''),
+    statCard(active,'Активных','','stat-grn'),
+    statCard(st?('$'+(+(st.daily_cost_usd||0)).toFixed(4)):'—','Расходы сегодня',''),
+    statCard(st?(st.groq_only_mode?'ВКЛ':'ВЫКЛ'):'—','Режим Groq-only',st&&st.groq_only_mode?'экономия токенов':'',''),
+  ].join('');
+
+  const provRu = {openai:'OpenAI',anthropic:'Anthropic',groq:'Groq',together:'Together AI',cohere:'Cohere'};
+  $('llm-prov').innerHTML = provs.map(([name,v]) => {
+    if (!v||typeof v!=='object') return `<div class="row"><span class="row-left">${dot(false)}<span>${esc(provRu[name]||name)}</span></span>${bdg('N/A','y')}</div>`;
+    const configured = v.configured !== false;
+    const ok = v.available===true && configured;
+    const noKey = !configured;
+    const hasError = configured && v.available===false && v.last_error;
+    const statusLabel = ok ? 'ОК' : noKey ? 'НЕТ КЛЮЧА' : hasError ? 'ОШИБКА' : 'НЕДОСТУПЕН';
+    const statusCls = ok ? 'g' : noKey ? 'y' : hasError ? 'r' : 'b';
+    const issue = v.tokens_exhausted?'лимит токенов':v.rate_limited?'rate limit':'';
+    const model = v.model||v.models?.[0]||'';
+    return `<div class="row">
+      <span class="row-left">${dot(ok)}<span style="font-weight:600">${esc(provRu[name]||name)}</span>${model?`<span style="font-size:10px;color:var(--txt3);margin-left:4px">${esc(String(model).slice(0,25))}</span>`:''}</span>
+      <div style="display:flex;gap:6px;align-items:center">
+        ${issue?bdg(issue,'r'):''}
+        ${bdg(statusLabel, statusCls)}
+      </div>
+    </div>`;
+  }).join('');
+
+  if (st) {
+    $('llm-sys').innerHTML = [
+      ['Расходы сегодня','$'+(+(st.daily_cost_usd||0)).toFixed(4)],
+      ['Лимит расходов','$'+(st.cost_limit_usd||0)],
+      ['Режим Groq-only',st.groq_only_mode?'ВКЛЮЧЁН':'ВЫКЛЮЧЕН'],
+      ['Автономный режим',st.autonomy_enabled?'включён':'выключен'],
+      ['Уровень защиты',st.guardrail_level||0],
+      ['Brain',st.brain||'?'],
+      ['Watchdog',st.watchdog||'?'],
+    ].map(([l,v]) => `<div class="row"><span class="row-left">${esc(l)}</span><span style="color:var(--acc);font-weight:600">${esc(String(v))}</span></div>`).join('');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ЧАТ
+// ═══════════════════════════════════════════════════════════════════════════
+function _renderChatText(text) {
+  let h = esc(text);
+  h = h.replace(/\[GREEN\]/g,  '<span class="cbadge cbadge-g">&#x25CF;&nbsp;OK</span>');
+  h = h.replace(/\[YELLOW\]/g, '<span class="cbadge cbadge-y">&#x25CF;&nbsp;WARN</span>');
+  h = h.replace(/\[RED\]/g,    '<span class="cbadge cbadge-r">&#x25CF;&nbsp;ERR</span>');
+  h = h.replace(/\[GRAY\]/g,   '<span class="cbadge" style="background:#ffffff10;color:var(--txt3);border:1px solid #ffffff15">&#x25CF;&nbsp;OFF</span>');
+  h = h.replace(/\[ACTIVE\]/g, '<span class="cbadge cbadge-g">&#x2713;&nbsp;ACTIVE</span>');
+  h = h.replace(/\[OPEN\]/g,   '<span class="cbadge cbadge-r">&#x26A1;&nbsp;OPEN</span>');
+  h = h.replace(/\[CLOSED\]/g, '<span class="cbadge cbadge-g">&#x2713;&nbsp;CLOSED</span>');
+  h = h.replace(/\*\*([^*]+)\*\*/g, '<strong style="color:var(--acc)">$1</strong>');
+  h = h.replace(/`([^`]+)`/g, '<code style="background:#0d2040;border-radius:3px;padding:1px 5px;font-size:.8em;color:#7eb8ff">$1</code>');
+  h = h.replace(/\n/g, '<br>');
+  return h;
+}
+function appendMsg(text, isUser, isThinking) {
+  const box = $('chat-box');
+  const div = document.createElement('div');
+  div.className = isThinking ? 'cmsg cmsg-thinking' : (isUser ? 'cmsg cmsg-u' : 'cmsg cmsg-a');
+  const ts = new Date().toLocaleTimeString('ru-RU', {hour:'2-digit',minute:'2-digit'});
+  if (isThinking) {
+    div.innerHTML = '<span style="animation:pulse 1.5s infinite;letter-spacing:3px">&#x25CF;&#x25CF;&#x25CF;</span>&nbsp;' + esc(text);
+  } else {
+    div.innerHTML = _renderChatText(text) + '<div class="cmsg-ts">' + ts + '</div>';
+  }
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+  return div;
+}
+
+async function sendChat() {
+  const inp=$('chat-inp'), msg=inp.value.trim();
+  if (!msg) return;
+  inp.value='';
+  appendMsg(msg, true);
+  const btn=$('chat-btn');
+  btn.disabled=true; btn.textContent='...';
+  const thinking=appendMsg('Думаю...', false, true);
+  const r = await api('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,source:'panel'})});
+  thinking.remove();
+  btn.disabled=false; btn.textContent='Отправить';
+  if(r&&r.pause_id){const pc=renderPauseCard(r.pause_id,r.pause_reason,r.pause_url,r.pause_label);const bx=document.getElementById("chat-box");if(bx){bx.appendChild(pc);bx.scrollTop=bx.scrollHeight;}if(typeof showToast!="undefined")showToast("Агент ожидает действия","y","⏸",6000);return;}
+  appendMsg(r?(r.reply||r.response||r.text||JSON.stringify(r)):'Нет ответа от сервера', false);
+}
+
+function quickChat(msg) { $('chat-inp').value=msg; sendChat(); }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ЛОГИ
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadLogs() {
+  const file=$('log-file').value, lines=$('log-lines').value||100;
+  $('log-name-fb').textContent = '↻ ' + file;
+  const d = await api('/api/logs?file='+encodeURIComponent(file)+'&lines='+lines);
+  const el=$('log-out');
+  if (!d||!d.lines) { el.textContent='Нет данных для файла: '+file; return; }
+  el.textContent = d.lines.join('\n') || 'Лог пустой';
+  el.scrollTop = el.scrollHeight;
+  $('log-name-fb').textContent = file + ' (' + (d.lines.length||0) + ' строк)';
+}
+
+function toggleAutolog() {
+  const btn=$('autolog-btn');
+  if (autologT) {
+    clearInterval(autologT); autologT=null;
+    btn.textContent='▶ Авто';
+    btn.classList.remove('btn-g');
+  } else {
+    loadLogs();
+    autologT=setInterval(loadLogs,3000);
+    btn.textContent='⏸ Стоп';
+    btn.classList.add('btn-g');
+  }
+}
+
+// ─── Utility ───────────────────────────────────────────────────────────────
+function showNoData(ids) { ids.forEach(id=>{ const el=$(id); if(el)el.innerHTML='<div class="alert alert-y">⚠ Нет данных</div>'; }); }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  BROWSER CONTROL v2
+// ═══════════════════════════════════════════════════════════════════════════
+let _brToken = '';
+let _brAutoT = null;
+
+function _brLog(msg, ok) {
+  const el = $('br-log');
+  if (!el) return;
+  const t = new Date().toLocaleTimeString();
+  const c = (ok===false) ? 'var(--red)' : 'var(--grn)';
+  el.innerHTML += '<div style="color:'+c+'">['+t+'] '+String(msg).replace(/</g,'&lt;')+'</div>';
+  el.scrollTop = el.scrollHeight;
+}
+
+function _brStateColor(s) {
+  const m = {INIT:'#6366f1',READY:'#22c55e',AI_ACTIVE:'#0ea5e9',
+    HUMAN_PENDING:'#f59e0b',HUMAN_ACTIVE:'#f97316',RECONCILING:'#8b5cf6',
+    RECOVERY:'#ec4899',SAFE_MODE:'#ef4444',QUARANTINED:'#dc2626',TERMINATED:'#374151'};
+  return m[s]||'#64748b';
+}
+
+async function loadBrowser() {
+  brInitBookmarks();
+  // State
+  try {
+    const d = await api('/api/browser/v2/state');
+    if (!d) return;
+    const sc = $('br-state-chip'); const oc = $('br-owner-chip');
+    if (sc) { sc.textContent = d.state||'UNKNOWN'; sc.style.background = _brStateColor(d.state); sc.style.color='#fff'; sc.style.border='none'; }
+    if (oc && d.lease) { oc.textContent = d.lease.owner||'no owner'; oc.style.color = (d.lease.owner&&d.lease.owner!=='none') ? 'var(--yel)' : 'var(--txt3)'; }
+  } catch(e) {}
+  // Screenshot
+  try {
+    const d2 = await api('/api/browser/v2/screenshot');
+    const img = $('br-screenshot'); const ns = $('br-no-screen');
+    if (d2&&d2.ok&&d2.image_b64&&img) {
+      img.src='data:image/png;base64,'+d2.image_b64; img.style.opacity='1';
+      if (ns) ns.style.display='none';
+    }
+    if (d2&&d2.url) { const u=$('br-current-url'); if(u) u.textContent=d2.url; }
+  } catch(e) {}
+  // Checkpoints
+  try {
+    const d3 = await api('/api/browser/v2/checkpoints');
+    const el = $('br-checkpoints-list');
+    if (el&&d3&&d3.checkpoints) {
+      if (!d3.checkpoints.length) { el.textContent='нет чекпоинтов'; return; }
+      el.innerHTML = d3.checkpoints.map(cp=>'<div style="padding:2px 0;border-bottom:1px solid var(--brd)"><span style="color:var(--acc)">'+
+        (cp.id||'?')+'</span> <span style="color:var(--txt3)">'+(cp.url||'')+'</span></div>').join('');
+    }
+  } catch(e) {}
+}
+
+async function browserStart() {
+  try {
+    const d = await api('/api/browser/v2/start','POST',{});
+    _brLog('Start: '+JSON.stringify(d), d&&d.ok);
+    await loadBrowser();
+    if (!_brAutoT) _brAutoT = setInterval(loadBrowser, 5000);
+  } catch(e) { _brLog('Start error: '+e, false); }
+}
+
+async function browserStop() {
+  try {
+    const d = await api('/api/browser/v2/stop','POST',{fencing_token:_brToken});
+    _brLog('Stop: '+JSON.stringify(d), d&&d.ok);
+    if (_brAutoT) { clearInterval(_brAutoT); _brAutoT=null; }
+    await loadBrowser();
+  } catch(e) { _brLog('Stop error: '+e, false); }
+}
+
+async function browserAcquireLease() {
+  try {
+    const d = await api('/api/browser/v2/lease/acquire','POST',{owner:'panel'});
+    if (d&&d.fencing_token) { _brToken=d.fencing_token; const el=$('br-token-display'); if(el)el.textContent=_brToken; }
+    _brLog('Lease: '+JSON.stringify(d), d&&d.ok);
+  } catch(e) { _brLog('Lease error: '+e, false); }
+}
+
+async function browserReleaseLease() {
+  try {
+    const d = await api('/api/browser/v2/lease/release','POST',{fencing_token:_brToken});
+    _brLog('Release: '+JSON.stringify(d), d&&d.ok);
+    _brToken=''; const el=$('br-token-display'); if(el)el.textContent='—';
+  } catch(e) { _brLog('Release error: '+e, false); }
+}
+
+function _brBanner(msg, type) {
+  const el = $('br-banner');
+  if (!el) return;
+  el.className = 'br-banner ' + (type||'info');
+  el.innerHTML = (type==='ok'?'?':type==='err'?'?':'??') + ' ' + esc(msg);
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { if(el) el.className='br-banner'; }, 4000);
+}
+function _brLoading(on) {
+  const el = $('br-load-overlay');
+  if (el) el.classList.toggle('active', !!on);
+}
+function hideBrFab() {
+  const f=$('br-back-fab'); if(f) f.classList.remove('visible');
+}
+async function browserNavClear() {
+  const inp=$('br-url-input'); if(inp) inp.value='';
+}
+async function browserNavigate() {
+  const url=($('br-url-input')||{}).value||''; if(!url) return;
+  try {
+    const d = await api('/api/browser/v2/action','POST',{fencing_token:_brToken,action:'navigate',params:{url}});
+    _brLog('Navigate '+url+': stage='+d.stage, d&&d.ok);
+    setTimeout(loadBrowser,1200);
+  } catch(e) { _brLog('Navigate error: '+e, false); }
+}
+
+async function browserExecuteAction() {
+  const action=($('br-action-select')||{}).value||'inspect';
+  let params={};
+  try { params=JSON.parse(($('br-action-params')||{}).value||'{}'); } catch(e) {}
+  try {
+    const d = await api('/api/browser/v2/action','POST',{fencing_token:_brToken,action,params});
+    _brLog(action+': '+JSON.stringify(d).slice(0,220), d&&d.ok);
+    if (['navigate','click','type','scroll'].includes(action)) setTimeout(loadBrowser,800);
+  } catch(e) { _brLog(action+' error: '+e, false); }
+}
+
+async function browserTakeoverRequest() {
+  try {
+    const d = await api('/api/browser/v2/takeover/request','POST',{fencing_token:_brToken});
+    _brLog('Takeover req: '+JSON.stringify(d), d&&d.ok); await loadBrowser();
+  } catch(e) { _brLog('Takeover error: '+e, false); }
+}
+
+async function browserTakeoverRelease() {
+  try {
+    const d = await api('/api/browser/v2/takeover/release','POST',{corrections:[]});
+    _brLog('Takeover release: '+JSON.stringify(d), d&&d.ok); await loadBrowser();
+  } catch(e) { _brLog('Release error: '+e, false); }
+}
+
+async function browserReconcile() {
+  try {
+    const d = await api('/api/browser/v2/reconcile','POST',{fencing_token:_brToken});
+    _brLog('Reconcile: '+JSON.stringify(d), d&&d.ok);
+  } catch(e) { _brLog('Reconcile error: '+e, false); }
+}
+
+async function browserRecover() {
+  try {
+    const d = await api('/api/browser/v2/recover','POST',{checkpoint_id:null});
+    _brLog('Recover: '+JSON.stringify(d), d&&d.ok); await loadBrowser();
+  } catch(e) { _brLog('Recover error: '+e, false); }
+}
+
+// ─── Init ──────────────────────────────────────────────────────────────────
+// ═══ BROWSER v2 tab switcher + URL navigation ════════════════════════════
+const BR2_URLS = {
+  cockpit:   '/cockpit-ui/',
+  bybit:     'https://www.bybit.com/trade/usdt/BTCUSDT',
+  testnet:   'https://testnet.bybit.com/trade/usdt/BTCUSDT',
+  apistatus: '/api/status',
+  github:    'https://github.com/search?q=bybit+trading+bot+python&type=repositories',
+};
+function br2Switch(name, label) {
+  const fr = $('br2-iframe'); const url = BR2_URLS[name];
+  if (!url || !fr) return;
+  fr.src = url;
+  document.querySelectorAll('.br2-tab').forEach(b => b.classList.remove('active'));
+  const btn = $('br2-btn-' + name); if (btn) btn.classList.add('active');
+  const pill = $('br2-status-text'); if (pill) pill.textContent = label || name;
+  const urlbar = $('br2-urlbar'); if (urlbar && name !== 'custom') urlbar.style.display='none';
+  brLog2('Переход: ' + (label||name) + ' → ' + url);
+}
+function br2ToggleCustom() {
+  const urlbar = $('br2-urlbar'); if (!urlbar) return;
+  const vis = urlbar.style.display !== 'none';
+  urlbar.style.display = vis ? 'none' : 'flex';
+  const cbtn = $('br2-btn-custom'); if (cbtn) cbtn.classList.toggle('active', !vis);
+  if (!vis) { const inp = $('br2-url'); if (inp) inp.focus(); }
+}
+function br2Navigate() {
+  const inp = $('br2-url'); const fr = $('br2-iframe');
+  if (!inp) return;
+  let url = (inp.value||'').trim(); if (!url) return;
+  if (!url.startsWith('http') && !url.startsWith('/')) url = 'https://' + url;
+  const isInternal = url.startsWith('/');
+  const pill = $('br2-status-text');
+  if (isInternal && fr) {
+    fr.src = url;
+    if (pill) { pill.textContent = url.slice(0,40)+(url.length>40?'…':''); pill.style.color='var(--grn)'; }
+    brLog2('✅ Загружаю: ' + url);
+  } else {
+    window.open(url, '_blank', 'noopener,noreferrer');
+    if (pill) { pill.textContent = 'внешняя вкладка'; pill.style.color='var(--acc)'; }
+    brLog2('🌐 Открыто в новой вкладке: ' + url);
+  }
+  document.querySelectorAll('.br2-tab').forEach(b=>b.classList.remove('active'));
+  const cbtn = $('br2-btn-custom'); if (cbtn) cbtn.classList.add('active');
+}
+function brLog2(msg) {
+  const el = $('br-log'); if (!el) return;
+  const ts = new Date().toLocaleTimeString('ru-RU');
+  el.innerHTML = '<div style="color:var(--txt3);margin-bottom:2px">['+ts+'] '+esc(msg)+'</div>'+el.innerHTML;
+  while(el.children.length>50) el.removeChild(el.children[el.children.length-1]);
+}
+
+
+// ═══ BROWSER BOOKMARKS ═══════════════════════════════════════════════════
+const BR_BOOKMARKS = [
+  { icon:'🏠', label:'Система',   url:'/cockpit-ui/',                      color:'#00d88020' },
+  { icon:'📊', label:'Bybit',     url:'https://www.bybit.com/trade/usdt/BTCUSDT', color:'#f59e0b20' },
+  { icon:'🧪', label:'Testnet',   url:'https://testnet.bybit.com',         color:'#8b5cf620' },
+  { icon:'🟡', label:'Kwork',     url:'https://kwork.ru',                  color:'#22c55e20' },
+  { icon:'💼', label:'Upwork',    url:'https://www.upwork.com',            color:'#22c55e20' },
+  { icon:'📧', label:'Gmail',     url:'https://mail.google.com',           color:'#ef444420' },
+  { icon:'✈️', label:'Telegram',  url:'https://web.telegram.org',         color:'#0ea5e920' },
+  { icon:'🐙', label:'GitHub',    url:'https://github.com',               color:'#6366f120' },
+  { icon:'🔍', label:'Google',    url:'https://www.google.com',           color:'#3b82f620' },
+  { icon:'🤖', label:'ChatGPT',   url:'https://chat.openai.com',          color:'#10b98120' },
+  { icon:'📋', label:'Freelancer',url:'https://www.freelancer.com',       color:'#f97316' + '20' },
+  { icon:'⚡', label:'API Status',url:'/api/status',                      color:'#00d88020' },
+];
+
+function brInitBookmarks() {
+  const el = document.getElementById('br-bookmarks');
+  if (!el) return;
+  el.innerHTML = BR_BOOKMARKS.map(b => {
+    const isLocal = b.url.startsWith('/');
+    const tag = isLocal ? '' : ' ↗';
+    return '<button onclick="brOpenBookmark(\'' + b.url + '\',\'' + b.label + '\')"'
+      + ' title="' + (isLocal ? 'Открыть в панели' : 'Новая вкладка: ' + b.url) + '"'
+      + ' style="background:' + b.color + ';border:1px solid ' + b.color.replace('20','40') + ';border-radius:10px;'
+      + 'padding:10px 4px;cursor:pointer;transition:all .18s ease;text-align:center;display:flex;'
+      + 'flex-direction:column;align-items:center;gap:4px;min-height:68px;width:100%"'
+      + ' onmouseover="this.style.transform=\'translateY(-3px)\';this.style.boxShadow=\'0 6px 20px rgba(0,0,0,.6)\';this.style.borderColor=\'var(--acc)\'"'
+      + ' onmouseout="this.style.transform=\'\';this.style.boxShadow=\'\';this.style.borderColor=\'' + b.color.replace('20','40') + '\'"><span style="font-size:24px;line-height:1">' + b.icon + '</span>'
+      + '<span style="font-size:10px;color:var(--txt);font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:82px">' + esc(b.label) + tag + '</span></button>';
+  }).join('');
+}
+
+function brOpenBookmark(url, label) {
+  var fr = document.getElementById('br2-iframe');
+  var inp = document.getElementById('br2-url');
+  var pill = document.getElementById('br2-status-text');
+  var isInternal = url.startsWith('/');
+  if (isInternal) {
+    if (fr) { try { fr.removeAttribute('srcdoc'); } catch(e){} fr.src = url; }
+    if (inp) inp.value = url;
+    if (pill) { pill.textContent = label; pill.style.color = 'var(--grn)'; }
+    brLog2('OK: ' + label);
+    var ov=document.getElementById('br2-loading');if(ov){ov.style.opacity='1';setTimeout(function(){ov.style.opacity='0'},3000);}
+  } else {
+    window.open(url, '_blank', 'noopener,noreferrer');
+    if (fr) {
+      fr.srcdoc = '<html><body style="background:#040810;color:#e2e8f0;font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:20px;text-align:center;margin:0">'
+        + '<div style="font-size:52px">&#x2705;</div>'
+        + '<div style="font-size:20px;font-weight:700;color:#fff">' + label + '</div>'
+        + '<div style="font-size:14px;color:#94a3b8;margin-top:4px">Открыто в новой вкладке браузера</div>'
+        + '<a href="' + url + '" target="_blank" style="color:#0ea5e9;font-size:12px;word-break:break-all;max-width:500px;padding:0 20px">' + url + '</a>'
+        + '<div style="margin-top:12px;padding:10px 20px;background:rgba(14,165,233,.1);border:1px solid rgba(14,165,233,.25);border-radius:10px;font-size:13px;color:#7dd3fc">'
+        + '&#x1F4AC; Войди на сайт, затем напиши MaxAI что сделать</div>'
+        + '</body></html>';
+    }
+    if (inp) inp.value = url;
+    if (pill) { pill.textContent = label + ' (новая вкладка)'; pill.style.color = 'var(--acc)'; }
+    brLog2('Новая вкладка: ' + label);
+  }
+}
+
+
+// OMEGA v21: TOAST
+function obsRefresh() {
+  fetch('/api/metrics/summary').then(r=>r.json()).then(d=>{
+    // KPIs
+    const kpiEl = document.getElementById('obs-kpis');
+    if (kpiEl) kpiEl.innerHTML = [
+      {l:'Баланс',v:'$'+(d.balance_usdt||0).toFixed(2)+' USDT',c:'#00d4ff'},
+      {l:'Сервисы',v:(d.services_up||0)+'/'+(d.services_total||0),c:d.services_up===d.services_total?'#22c55e':'#eab308'},
+      {l:'Чат запросы',v:String(d.chat_requests_total||0),c:'#a78bfa'},
+      {l:'Endpoint',v:'/metrics',c:'#94a3b8'},
+    ].map(k=>`<div class="stat"><div class="stat-val" style="color:${k.c};font-size:18px">${k.v}</div><div class="stat-lbl">${k.l}</div></div>`).join('');
+
+    // Services
+    const svcEl = document.getElementById('obs-services');
+    if (svcEl && d.services) svcEl.innerHTML = Object.entries(d.services).map(([n,up])=>
+      `<div style="display:flex;align-items:center;gap:6px;padding:5px 8px;background:${up?'rgba(34,197,94,.08)':'rgba(239,68,68,.08)'};border:1px solid ${up?'rgba(34,197,94,.25)':'rgba(239,68,68,.25)'};border-radius:6px">
+        <span style="width:7px;height:7px;border-radius:50%;background:${up?'#22c55e':'#ef4444'};flex-shrink:0"></span>
+        <span style="font-size:11px;color:var(--txt)">${n}</span>
+      </div>`
+    ).join('');
+  }).catch(e=>console.warn('obs metrics',e));
+
+  // Raw Prometheus
+  fetch('/metrics').then(r=>r.text()).then(t=>{
+    const el=document.getElementById('obs-raw');
+    if(el) el.textContent=t;
+  }).catch(()=>{});
+
+  // Pending actions
+  fetch('/api/actions/pending').then(r=>r.json()).then(items=>{
+    const el=document.getElementById('obs-actions');
+    if(!el) return;
+    if(!items.length){ el.innerHTML='<div style="font-size:11px;color:var(--txt3);text-align:center;padding:12px">✅ Нет ожидающих действий</div>'; return; }
+    el.innerHTML=items.map(a=>`
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px;background:#0a1628;border-radius:8px;margin-bottom:6px">
+        <div>
+          <span style="font-size:10px;color:var(--txt3)">${a.type} • ${a.risk}</span>
+          <div style="font-size:12px;color:var(--txt)">${a.description.slice(0,80)}</div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button onclick="obsApprove('${a.id}')" style="background:#22c55e;border:none;color:#000;padding:4px 10px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer">✅</button>
+          <button onclick="obsReject('${a.id}')" style="background:none;border:1px solid #ef4444;color:#ef4444;padding:4px 8px;border-radius:5px;font-size:11px;cursor:pointer">✕</button>
+        </div>
+      </div>`).join('');
+  }).catch(()=>{});
+}
+
+function obsApprove(id) {
+  fetch('/api/actions/approve/'+id,{method:'POST'}).then(r=>r.json()).then(d=>{
+    showToast(d.ok?'Действие выполнено':'Ошибка: '+d.error, d.ok?'g':'r');
+    obsRefresh();
+  });
+}
+function obsReject(id) {
+  fetch('/api/actions/reject/'+id,{method:'POST'}).then(()=>obsRefresh());
+}
+
+function showToast(msg,type,icon,dur){
+  var c=document.getElementById("toast-container");if(!c)return;
+  var t=document.createElement("div");t.className="toast toast-"+(type||"b");
+  t.innerHTML="<span class='toast-icon'>"+(icon||"\u26a1")+"</span><span>"+msg+"</span>";
+  c.appendChild(t);
+  setTimeout(function(){t.style.animation="toastIn .3s reverse forwards";setTimeout(function(){if(t.parentNode)t.parentNode.removeChild(t);},350);},dur||3500);
+}
+// OMEGA v21: HYDRATION
+var _hFns={"observability":obsRefresh,dash:function(){if(typeof loadDash!='undefined')loadDash();},revenue:function(){if(typeof loadRevenue!='undefined')loadRevenue();},agents:function(){if(typeof loadAgents!='undefined')loadAgents();},tasks:function(){if(typeof loadTasks!='undefined')loadTasks();},services:function(){if(typeof loadServicesShop!='undefined')loadServicesShop();},llm:function(){if(typeof loadLLM!='undefined')loadLLM();},logs:function(){if(typeof loadLogs!='undefined')loadLogs();},quality:function(){if(typeof loadQuality!='undefined')loadQuality();},browser:function(){if(typeof brInitBookmarks!='undefined')brInitBookmarks();}};
+var _hT={};
+document.addEventListener("DOMContentLoaded",function(){
+  document.querySelectorAll(".tb").forEach(function(tb){
+    tb.addEventListener("mouseover",function(){
+      var m=(tb.getAttribute("onclick")||"")
+        .match(/go\\('[^']+'\\)/);
+      if(m&&m[0]){
+        var id=m[0].slice(4,-2);
+        clearTimeout(_hT[id]);
+        _hT[id]=setTimeout(function(){if(_hFns[id])try{_hFns[id]();}catch(e){}},120);
+      }
+    });
+  });
+});
+// OMEGA v21: AGENTIC PAUSE
+function renderPauseCard(pid,reason,aUrl,aLabel){
+  var d=document.createElement("div");d.className="pause-card";d.id="pause-"+pid;
+  var eu=encodeURIComponent(aUrl||"");
+  d.innerHTML="<div class='pause-card-title'>\u23f8 \u0422\u0440\u0435\u0431\u0443\u0435\u0442\u0441\u044f \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435</div>"
+    +"<div class='pause-card-body'>"+(reason||"\u0410\u0433\u0435\u043d\u0442 \u043f\u0440\u0438\u043e\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d.")+"</div>"
+    +"<div class='pause-card-actions'>"
+    +"<button class='pause-btn-open' onclick=\"pauseOpen('"+pid+"','"+eu+"')\">"
+    +"\U0001f5a5 "+(aLabel||"\u041e\u0442\u043a\u0440\u044b\u0442\u044c")+"</button>"
+    +"<button class='pause-btn-proceed' id='pp-"+pid+"' onclick=\"pauseProceed('"+pid+"')\" disabled>"
+    +"\u2705 \u0413\u043e\u0442\u043e\u0432\u043e \u2014 \u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c</button></div>";
+  return d;
+}
+function pauseOpen(pid,eu){
+  var url=decodeURIComponent(eu||"");
+  if(url){if(url.startsWith("/")){go("browser");setTimeout(function(){var f=document.getElementById("br2-iframe");if(f)f.src=url;},150);}
+  else window.open(url,"_blank","noopener,noreferrer");}
+  var b=document.getElementById("pp-"+pid);if(b)b.disabled=false;
+  showToast("\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u0438 \u043d\u0430\u0436\u043c\u0438\u0442\u0435 \u0413\u043e\u0442\u043e\u0432\u043e","y","\u23f8",7000);
+}
+function pauseProceed(pid){
+  var b=document.getElementById("pp-"+pid);if(b){b.disabled=true;b.textContent="\u23f3...";}
+  fetch("/api/pause/resume/"+pid,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})
+    .then(function(r){return r.json();}).then(function(){
+      var card=document.getElementById("pause-"+pid);
+      if(card){card.style.borderColor="rgba(0,232,122,.4)";
+        card.innerHTML="<div class='pause-card-title' style='color:var(--grn)'>\u2705 \u0410\u0433\u0435\u043d\u0442 \u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0430\u0435\u0442</div>";}
+      showToast("\u0410\u0433\u0435\u043d\u0442 \u0432\u043e\u0437\u043e\u0431\u043d\u043e\u0432\u0438\u043b \u0440\u0430\u0431\u043e\u0442\u0443","g","\u25b6\ufe0f");
+    }).catch(function(e){showToast("\u041e\u0448\u0438\u0431\u043a\u0430: "+e,"r","\u274c");});
+}
+
+go('dash');
+</script>
+
+<!-- MaxAI v10.0 Telemetry Bridge: Redis DB3 -> WebSocket -> Dashboard -->
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+(function() {
+  var _wsRetry = 0;
+  var _wsMaxRetry = 8;
+  var _wsBackoff = [1000,2000,4000,8000,15000,30000,60000,60000];
+  var _sock = null;
+
+  // Extract & update circuit widget from telemetry payload
+  function _applyCircuit(d) {
+    var cbEl = document.getElementById('dash-circuit');
+    if (!cbEl) return;
+    var state = d.state || d.circuit_state || 'CLOSED';
+    var atr   = (d.atr != null) ? parseFloat(d.atr).toFixed(3) : null;
+    var rgm   = d.regime || null;
+    var conf  = (d.confidence != null) ? parseFloat(d.confidence).toFixed(2) : null;
+    var vault = parseFloat(d.vaultBalance || d.vault_balance || '0');
+    var stCol = state==='OPEN' ? 'var(--red)' : state==='HALF_OPEN' ? 'var(--yel)' : 'var(--grn)';
+    var stBg  = state==='OPEN' ? '#ff305010' : state==='HALF_OPEN' ? '#ffb80010' : '#00d88010';
+    var stBrd = state==='OPEN' ? '#ff305040' : state==='HALF_OPEN' ? '#ffb80040' : '#00d88040';
+    var ico   = state==='OPEN' ? '⚡' : state==='HALF_OPEN' ? '⚠' : '✅';
+    var anim  = state==='OPEN' ? 'animation:pulse 1s infinite' : state==='HALF_OPEN' ? 'animation:pulse 2s infinite' : '';
+    var ts    = new Date().toLocaleTimeString('ru-RU');
+    cbEl.innerHTML = '<div style="background:'+stBg+';border:1px solid '+stBrd+';border-radius:8px;padding:10px 16px;display:flex;align-items:center;gap:18px;flex-wrap:wrap">'
+      + '<div style="display:flex;align-items:center;gap:8px">'
+      + '<span style="font-size:18px;'+anim+'">'+ico+'</span>'
+      + '<div><div style="font-size:10px;color:var(--txt3);letter-spacing:.5px">CIRCUIT BREAKER</div>'
+      + '<div style="font-size:15px;font-weight:800;color:'+stCol+';letter-spacing:.5px">'+state+'</div></div></div>'
+      + (atr!==null ? '<div><div style="font-size:10px;color:var(--txt3)">ATR</div><div style="font-size:13px;font-weight:600;color:var(--txt)">'+atr+'</div></div>' : '')
+      + (rgm ? '<div><div style="font-size:10px;color:var(--txt3)">Regime</div><div style="font-size:13px;font-weight:600;color:'+(rgm==='bull'?'var(--grn)':rgm==='bear'?'var(--red)':'var(--txt)')+'">'+rgm.toUpperCase()+'</div></div>' : '')
+      + (conf!==null ? '<div><div style="font-size:10px;color:var(--txt3)">Conf</div><div style="font-size:13px;font-weight:600;color:var(--txt)">'+conf+'</div></div>' : '')
+      + '<div><div style="font-size:10px;color:var(--txt3)">Vault</div><div style="font-size:13px;font-weight:700;color:var(--acc)">$'+vault.toFixed(4)+'</div></div>'
+      + '<div style="margin-left:auto;text-align:right"><div style="font-size:10px;color:var(--txt3)">WS Live</div>'
+      + '<div style="font-size:10px;color:var(--grn)">● '+ts+'</div></div></div>';
+  }
+
+  function _connect() {
+    try {
+      _sock = io('http://' + window.location.hostname + ':3001/cockpit', {
+        transports: ['websocket','polling'],
+        reconnection: false,
+        timeout: 8000,
+      });
+
+      _sock.on('connect', function() {
+        _wsRetry = 0;
+        console.log('[Telemetry] WS connected sid=' + _sock.id);
+      });
+
+      _sock.on('telemetry:snapshot', function(d) {
+        _applyCircuit(Object.assign({}, d.circuit || {}, {vaultBalance: d.vaultBalance}));
+      });
+
+      _sock.on('telemetry:circuit', function(d) { _applyCircuit(d); });
+
+      _sock.on('telemetry:alpha', function(d) {
+        _applyCircuit({state: window._cbState || 'CLOSED', atr: d.atr, regime: d.regime, confidence: d.confidence});
+      });
+
+      _sock.on('telemetry:vault', function(d) {
+        window._vaultBal = d.balance;
+        _applyCircuit({state: window._cbState || 'CLOSED', vaultBalance: d.balance});
+      });
+
+      _sock.on('disconnect', function(reason) {
+        console.warn('[Telemetry] WS disconnected:', reason);
+        _schedRetry();
+      });
+
+      _sock.on('connect_error', function(err) {
+        console.warn('[Telemetry] WS error:', err.message);
+        _sock.disconnect();
+        _schedRetry();
+      });
+    } catch(e) {
+      console.warn('[Telemetry] WS init failed:', e);
+      _schedRetry();
+    }
+  }
+
+  function _schedRetry() {
+    if (_wsRetry >= _wsMaxRetry) return;
+    var delay = _wsBackoff[Math.min(_wsRetry, _wsBackoff.length-1)];
+    _wsRetry++;
+    console.log('[Telemetry] Reconnect in ' + delay + 'ms (attempt ' + _wsRetry + ')');
+    setTimeout(_connect, delay);
+  }
+
+  // Init after DOM ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _connect);
+  } else {
+    setTimeout(_connect, 500);
+  }
+})();
+</script>
+</body>
+</html>

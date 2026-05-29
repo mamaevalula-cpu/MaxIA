@@ -1,0 +1,3 @@
+# Requirements for kwork_status_tracker
+python-dotenv
+httpx

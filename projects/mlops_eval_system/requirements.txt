@@ -1,0 +1,5 @@
+# Requirements for mlops_eval_system
+scikit-learn
+pandas
+numpy
+joblib

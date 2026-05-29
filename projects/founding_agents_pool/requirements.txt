@@ -1,0 +1,3 @@
+# Requirements for founding_agents_pool
+python-dotenv
+httpx
