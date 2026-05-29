@@ -697,7 +697,10 @@ body.loading #global-loader{opacity:1}
       </div>
     </div>
     <div class="card">
-      <div class="card-title"><span class="card-title-ico">📈</span>30-дневная история баланса</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div class="card-title" style="margin:0"><span class="card-title-ico">📈</span>30-дневная история баланса</div>
+        <div id="rev-trend" style="font-size:18px;letter-spacing:2px;color:var(--grn)"></div>
+      </div>
       <div id="rev-history" style="max-height:260px;overflow-y:auto"></div>
     </div>
   </div>
@@ -1180,6 +1183,27 @@ body.loading #global-loader{opacity:1}
     <div id="br-log" class="logbox" style="height:130px;min-height:60px;font-size:.74rem"></div>
   </div>
 </div>
+<!-- Keyboard shortcuts modal -->
+<div id="kb-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.7);backdrop-filter:blur(4px)" onclick="if(event.target===this)$'kb-modal'.style.display='none'">
+  <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg2);border:1px solid var(--brd);border-radius:12px;padding:24px;min-width:340px;max-width:480px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div style="font-size:16px;font-weight:700;color:#ddeeff">⌨️ Горячие клавиши</div>
+      <button onclick="$('kb-modal').style.display='none'" style="background:none;border:1px solid var(--brd);color:var(--txt3);padding:3px 9px;border-radius:6px;cursor:pointer;font-size:12px">✕</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px" id="kb-list">
+      <div style="color:var(--acc);font-family:monospace">? </div><div style="color:var(--txt2)">Показать эту помощь</div>
+      <div style="color:var(--acc);font-family:monospace">Ctrl+R</div><div style="color:var(--txt2)">Обновить вкладку</div>
+      <div style="color:var(--acc);font-family:monospace">1-9</div><div style="color:var(--txt2)">Переключить вкладку</div>
+      <div style="color:var(--acc);font-family:monospace">G + D</div><div style="color:var(--txt2)">Главная (Dashboard)</div>
+      <div style="color:var(--acc);font-family:monospace">G + T</div><div style="color:var(--txt2)">Торговля (Trading)</div>
+      <div style="color:var(--acc);font-family:monospace">G + C</div><div style="color:var(--txt2)">Чат (Chat)</div>
+      <div style="color:var(--acc);font-family:monospace">G + L</div><div style="color:var(--txt2)">Логи (Logs)</div>
+      <div style="color:var(--acc);font-family:monospace">G + A</div><div style="color:var(--txt2)">Агенты (Agents)</div>
+      <div style="color:var(--acc);font-family:monospace">Esc</div><div style="color:var(--txt2)">Закрыть модал</div>
+    </div>
+  </div>
+</div>
+
 <!-- br2 legacy stubs (referenced in JS helpers) -->
 <div id="br2-urlbar" style="display:none"></div>
 <button id="br2-btn-custom" style="display:none"></button>
@@ -1987,6 +2011,20 @@ async function loadRevenue() {
 
   // Balance history
   const hist = rv ? (rv.history||[]).slice(-14).reverse() : [];
+  // Sparkline from balance history
+  const trendEl=$('rev-trend');
+  if(trendEl&&hist.length>1) {
+    const bals=hist.slice(-8).map(h=>+(h.balance||0)).filter(b=>b>0);
+    if(bals.length>1) {
+      const mn=Math.min(...bals),mx=Math.max(...bals);
+      const blocks=['▁','▂','▃','▄','▅','▆','▇','█'];
+      const spark=bals.map(b=>blocks[Math.round((b-mn)/(mx-mn||1)*7)]).join('');
+      const trend=bals[bals.length-1]>bals[0]?'var(--grn)':'var(--red)';
+      trendEl.style.color=trend;
+      trendEl.textContent=spark;
+    }
+  }
+
   if($('rev-history')) {
     $('rev-history').innerHTML = hist.length ? `<table style="width:100%;font-size:11px">
       <thead><tr><th>Дата</th><th>Баланс</th><th>PnL</th><th>Лиды</th></tr></thead>
@@ -2792,9 +2830,11 @@ async function loadChat() {
     const recent = hist.slice(-25);
     recent.forEach(m=>{
       const isUser = m.role==='user';
-      const ts = m.ts ? new Date(m.ts*1000).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}) : '';
+      const tsRaw = m.ts||(m.created_at&&m.created_at/1000)||0;
+      const ts = tsRaw ? new Date(tsRaw*1000).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}) : '';
       const div=document.createElement('div');
       div.className = isUser?'cmsg cmsg-u':'cmsg cmsg-a';
+      if(ts) { const tsEl=document.createElement('div'); tsEl.style.cssText='font-size:9px;color:var(--txt3);margin-top:2px;opacity:.7'; tsEl.textContent=ts; div.appendChild(tsEl); }
       const src = (m.source&&m.source!=='panel'&&m.source!=='user') ? '<span style="font-size:9px;color:var(--txt3);margin-right:4px">['+esc(m.source)+']</span>' : '';
       div.innerHTML = src + _renderChatText(String(m.content||'').slice(0,400)+(String(m.content||'').length>400?'…':''))+'<div class="cmsg-ts">'+ts+'</div>';
       box.appendChild(div);
@@ -3237,6 +3277,40 @@ function obsApprove(id) {
 function obsReject(id) {
   fetch('/api/actions/reject/'+id,{method:'POST'}).then(()=>obsRefresh());
 }
+
+// ─── Keyboard shortcuts ───────────────────────────────────────────────────────
+(function(){
+  let gMode=false, gTimer=null;
+  document.addEventListener('keydown',function(e){
+    const tag=(e.target||{}).tagName||'';
+    if(/INPUT|TEXTAREA|SELECT/.test(tag)) return;
+    if(e.key==='Escape'){
+      const m=$('kb-modal');
+      if(m&&m.style.display!=='none'){m.style.display='none';return;}
+    }
+    if(e.key==='?'&&!e.ctrlKey&&!e.metaKey){
+      const m=$('kb-modal');
+      if(m) m.style.display=m.style.display==='none'?'flex':'none';
+      return;
+    }
+    if(e.key.toLowerCase()==='g'&&!e.ctrlKey){
+      gMode=true; clearTimeout(gTimer); gTimer=setTimeout(()=>{gMode=false;},1500);
+      return;
+    }
+    if(gMode) {
+      gMode=false; clearTimeout(gTimer);
+      const navMap={d:'dash',t:'trading',c:'chat',l:'logs',a:'agents',r:'revenue',m:'money',s:'settings',q:'quality'};
+      const target=navMap[e.key.toLowerCase()];
+      if(target){go(target);return;}
+    }
+    const tabKeys=['1','2','3','4','5','6','7','8','9'];
+    if(tabKeys.includes(e.key)&&!e.ctrlKey&&!e.metaKey){
+      const TABS2=['dash','trading','revenue','services','agents','tasks','arb','money','earnings'];
+      const t=TABS2[parseInt(e.key)-1];
+      if(t){go(t);return;}
+    }
+  });
+})();
 
 function showToast(msg,type,icon,dur){
   var c=document.getElementById("toast-container");if(!c)return;
@@ -3931,21 +4005,40 @@ async function loadMoney(){
       statCard(bal,'Баланс USDT',null,null)
     ].join('');
 
-    // Prices table
+    // Rich price + signal grid
     const prEl=$('money-prices');
     if(prEl){
       const entries=Object.entries(pm).filter(([k,v])=>v>0&&!k.includes('_'));
+      const sigsMap={};
+      const sigArr2=sigsRaw&&(Array.isArray(sigsRaw.signals)?sigsRaw.signals:Array.isArray(sigsRaw)?sigsRaw:[]);
+      sigArr2.forEach(s=>{ if(s.symbol) sigsMap[s.symbol]=s; });
       if(entries.length){
-        prEl.innerHTML='<table style="width:100%;border-collapse:collapse;font-size:12px">'
-          +'<thead><tr style="color:var(--txt3);border-bottom:1px solid var(--brd2)">'
-          +'<th style="text-align:left;padding:6px">Актив</th>'
-          +'<th style="text-align:right;padding:6px">Цена</th>'
-          +'</tr></thead><tbody>'
-          +entries.slice(0,15).map(([sym,p])=>'<tr style="border-bottom:1px solid rgba(255,255,255,.03)">'
-            +'<td style="padding:5px 6px;font-weight:700">'+esc(sym)+'/USDT</td>'
-            +'<td style="padding:5px 6px;text-align:right;color:var(--grn)">$'+(+p).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4})+'</td>'
-            +'</tr>').join('')
-          +'</tbody></table>';
+        prEl.innerHTML='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px">'
+          +entries.slice(0,10).map(([sym,p])=>{
+            const sig=sigsMap[sym]||{};
+            const rsi=sig.rsi!=null?(+sig.rsi):null;
+            const trend=sig.trend||'neutral';
+            const sigType=(sig.signal||'HOLD').toUpperCase();
+            const isBull=/BUY|LONG|BULL/.test(sigType);
+            const isBear=/SELL|SHORT|BEAR/.test(sigType);
+            const trendIco=trend==='bullish'?'↑':trend==='bearish'?'↓':'→';
+            const trendCol=trend==='bullish'?'var(--grn)':trend==='bearish'?'var(--red)':'var(--txt3)';
+            const rsiCol=rsi==null?'var(--txt3)':rsi>70?'var(--red)':rsi<30?'var(--grn)':'var(--txt2)';
+            const rsiPct=rsi!=null?Math.min(rsi,100):50;
+            const pDisp=(+p)>1000?'$'+(+p).toLocaleString('en-US',{maximumFractionDigits:0}):'$'+(+p).toFixed((+p)>10?2:4);
+            return '<div style="padding:8px;background:var(--bg3);border:1px solid '+(isBull?'rgba(0,232,122,.18)':isBear?'rgba(255,45,85,.18)':'var(--brd)')+';border-radius:8px">'
+              +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
+              +'<span style="font-weight:700;font-size:12px">'+esc(sym)+'</span>'
+              +'<span style="font-size:13px;color:'+trendCol+'">'+trendIco+'</span>'
+              +'</div>'
+              +'<div style="font-size:14px;font-weight:800;color:'+(isBull?'var(--grn)':isBear?'var(--red)':'var(--txt)')+';margin-bottom:4px">'+pDisp+'</div>'
+              +(rsi!=null?
+                '<div style="margin-bottom:3px"><div style="background:var(--brd);border-radius:3px;height:3px"><div style="background:'+rsiCol+';border-radius:3px;height:3px;width:'+rsiPct+'%"></div></div></div>'
+                +'<div style="display:flex;justify-content:space-between;font-size:9px;color:var(--txt3)"><span>RSI '+rsi.toFixed(0)+'</span><span style="color:'+rsiCol+'">'+esc(rsi>70?'Пер.куп.':rsi<30?'Пер.прод.':'Нейтр.')+'</span></div>':''
+              )
+              +'</div>';
+          }).join('')
+          +'</div>';
       } else {
         prEl.innerHTML='<div style="text-align:center;padding:24px;color:var(--txt3)">Нет данных</div>';
       }
