@@ -616,6 +616,7 @@ body.loading #global-loader{opacity:1}
 
 <!-- ═══════════════════ ГЛАВНАЯ ═══════════════════ -->
 <div id="sc-dash" class="sc on">
+  <div id="dash-pending" style="margin-bottom:10px"></div>
   <div class="g5" id="dash-kpis">
     <div class="stat"><div class="loader" style="margin:8px auto 6px"></div><div class="stat-lbl">Загрузка...</div></div>
   </div>
@@ -752,6 +753,7 @@ body.loading #global-loader{opacity:1}
 <!-- ═══════════════════ АГЕНТЫ ═══════════════════ -->
 <div id="sc-agents" class="sc">
   <div class="g4" id="ag-kpis"></div>
+  <div id="ag-quick" style="margin-bottom:14px"></div>
   <div class="g2">
     <div class="card">
       <div class="card-title"><span class="card-title-ico">🏅</span>По уровню</div>
@@ -776,6 +778,7 @@ body.loading #global-loader{opacity:1}
 <!-- ═══════════════════ ЗАДАЧИ ═══════════════════ -->
 <div id="sc-tasks" class="sc">
   <div class="g4" id="task-kpis"></div>
+  <div id="task-running" style="margin-bottom:14px"></div>
   <div class="card" style="margin-bottom:14px">
     <div class="card-title"><span class="card-title-ico">📋</span>Список задач</div>
     <div class="tbl-wrap">
@@ -985,6 +988,7 @@ body.loading #global-loader{opacity:1}
       <div id="llm-sys"></div>
     </div>
   </div>
+  <div id="llm-routing" style="margin-top:14px;margin-bottom:14px"></div>
   <div class="sec-title" style="margin-top:16px"><span>📊 Статистика вызовов</span></div>
   <div class="g2">
     <div class="card">
@@ -1047,6 +1051,10 @@ body.loading #global-loader{opacity:1}
       </select>
       <input class="inp" id="log-lines" type="number" value="100" min="20" max="500" style="width:80px" oninput="debouncedLoadLogs()">
       <span style="font-size:11px;color:var(--txt3)">строк</span>
+      <input class="inp" id="log-search" placeholder="🔍 Поиск..." style="min-width:100px;max-width:160px" oninput="filterLogsClient()">
+      <button class="btn btn-sm btn-r" onclick="filterLogsClient('ERROR')" title="Только ошибки">ERR</button>
+      <button class="btn btn-sm btn-y" onclick="filterLogsClient('WARN')" title="Только предупреждения">WARN</button>
+      <button class="btn btn-sm" onclick="filterLogsClient('')" title="Все строки">ВСЕ</button>
       <button class="btn" onclick="loadLogs()">↻ Обновить</button>
       <button class="btn btn-sm" onclick="toggleAutolog()" id="autolog-btn">▶ Авто</button>
       <div class="fb show" id="log-name-fb" style="background:none;border:none;color:var(--txt3)"></div>
@@ -1489,11 +1497,27 @@ async function loadDash() {
         if(!av5||!av5.system) return;
         const sys=av5.system;
         const sysEl=$('dash-system-kpis');
-        if(sysEl) sysEl.innerHTML=[
-          statCard((sys.cpu||0).toFixed(1)+'%','CPU','',(sys.cpu||0)>80?'stat-red':(sys.cpu||0)>50?'stat-yel':'stat-grn'),
-          statCard(((sys.ram_mb||0)/1024).toFixed(1)+'GB','RAM','',(sys.ram_mb||0)>3500?'stat-red':null),
-          statCard(sys.brain_log_lines||0,'Лог строк','brain',null),
-        ].join('');
+        if(sysEl) {
+          const cpu=+(sys.cpu||0), ramMb=+(sys.ram_mb||0), ramGb=(ramMb/1024).toFixed(1);
+          const cpuCol=cpu>80?'var(--red)':cpu>50?'var(--yel)':'var(--grn)';
+          const ramCol=ramMb>3500?'var(--red)':ramMb>2800?'var(--yel)':'var(--acc)';
+          const ramPct=Math.min(ramMb/4096*100,100);
+          sysEl.innerHTML=
+            '<div class="stat" style="min-width:0">'
+            +'<div class="stat-val" style="color:'+cpuCol+'">'+cpu.toFixed(1)+'%</div>'
+            +'<div class="stat-lbl">CPU</div>'
+            +'<div style="margin-top:4px">'+bar(cpu,cpu>80?'red':cpu>50?'yel':'grn')+'</div>'
+            +'</div>'
+            +'<div class="stat" style="min-width:0">'
+            +'<div class="stat-val" style="color:'+ramCol+'">'+ramGb+'GB</div>'
+            +'<div class="stat-lbl">RAM</div>'
+            +'<div style="margin-top:4px">'+bar(ramPct,ramMb>3500?'red':'acc')+'</div>'
+            +'</div>'
+            +'<div class="stat" style="min-width:0">'
+            +'<div class="stat-val" style="color:var(--txt2)">'+fmtN(sys.brain_log_lines||0)+'</div>'
+            +'<div class="stat-lbl">Лог строк</div>'
+            +'</div>';
+        }
       });
     });
 
@@ -1630,6 +1654,28 @@ async function loadDash() {
   clearInterval(window._svcPollT);
   window._svcPollT = setInterval(loadServices, 30000);
 
+  // Pending actions banner
+  api('/api/actions/pending').catch(()=>null).then(pending=>{
+    const acts=(Array.isArray(pending)?pending:(pending&&pending.actions)||[]);
+    const pEl=$('dash-pending');
+    if(!pEl) return;
+    if(acts.length) {
+      pEl.innerHTML='<div style="background:rgba(255,204,0,.08);border:1px solid rgba(255,204,0,.3);border-radius:8px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">'
+        +'<div style="display:flex;align-items:center;gap:8px">'
+        +'<span style="font-size:16px">⏸</span>'
+        +'<div><div style="font-weight:700;font-size:13px;color:var(--yel)">Агент ожидает подтверждения ('+(acts.length)+(acts.length===1?' действие':' действий')+')</div>'
+        +'<div style="font-size:11px;color:var(--txt2)">'+esc((acts[0]&&(acts[0].description||acts[0].action||acts[0].reason)||'Действие требует подтверждения').slice(0,80))+'</div>'
+        +'</div></div>'
+        +'<div style="display:flex;gap:6px">'
+        +acts.slice(0,2).map(a=>'<button class="btn btn-g" style="font-size:11px" onclick="approveAction(\''+(a.id||a.action_id||'')+'\')">'+esc(a.label||'✅ Одобрить')+'</button>').join('')
+        +'<button class="btn" style="font-size:11px" onclick="go(\'chat\')">💬 Чат</button>'
+        +'</div>'
+        +'</div>';
+    } else {
+      pEl.innerHTML='';
+    }
+  });
+
   // Activity feeds
   Promise.all([
     api('/api/chat/history').catch(()=>null),
@@ -1661,6 +1707,30 @@ async function loadDash() {
       }).join('') : '<div style="color:var(--txt3);padding:12px;font-size:12px;text-align:center">⚡ Задач нет</div>';
     }
   });
+}
+
+// ─── Approve pending action ───────────────────────────────────────────────────
+async function approveAction(id) {
+  const r=await api('/api/actions/approve/'+id,{method:'POST'}).catch(()=>null);
+  if(r) { showToast('✅ Действие одобрено','g','✅',3000); loaded.dash=false; loadDash(); }
+  else showToast('❌ Ошибка одобрения','r','!',3000);
+}
+
+// ─── Agent quick launch ──────────────────────────────────────────────────────
+async function agQuickLaunch(idx) {
+  const tasks=window._agQuickTasks||[];
+  const t=tasks[idx];
+  if(!t) return;
+  const fb=$('ag-quick-fb');
+  if(fb) fb.innerHTML='<span style="color:var(--txt3)">⏳ Запуск: '+esc(t.label)+'...</span>';
+  const r=await api('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({goal:t.goal,tags:t.tags||['agent']})}).catch(()=>null);
+  if(fb) {
+    if(r&&(r.task_id||r.id||r.ok!==false)) {
+      fb.innerHTML='<span style="color:var(--grn)">✅ Агент запущен: '+esc(t.label)+(r.task_id?'  ID:'+esc(String(r.task_id).slice(0,8)):'')+'</span>';
+      showToast('✅ Агент запущен: '+t.label,'g',t.icon,3000);
+    } else { fb.innerHTML='<span style="color:var(--red)">❌ Ошибка запуска</span>'; }
+    setTimeout(()=>{if(fb)fb.innerHTML='';},5000);
+  }
 }
 
 // ─── Dashboard quick actions ──────────────────────────────────────────────────
@@ -1971,6 +2041,28 @@ async function loadAgents() {
   const idl = v5ag?(v5ag.idle||0):fleet.filter(a=>a.status==='idle').length;
   const errA = v5ag?(v5ag.error||0):fleet.filter(a=>a.status==='error').length;
 
+  // Quick launch panel
+  const qEl=$('ag-quick');
+  if(qEl) {
+    const quickTasks=[
+      {icon:'💹',label:'Анализ рынка',goal:'Сделай анализ криптовалютного рынка BTC ETH SOL',tags:['trading']},
+      {icon:'💰',label:'Отчёт доходов',goal:'Создай отчёт о доходах корпорации MaxAI за сегодня',tags:['revenue']},
+      {icon:'🔍',label:'Проверка ошибок',goal:'Проверь логи системы на критические ошибки',tags:['monitoring']},
+      {icon:'📊',label:'Статус системы',goal:'Дай полный отчёт о состоянии всех сервисов',tags:['system']},
+      {icon:'🎯',label:'Поиск лидов',goal:'Найди 5 потенциальных клиентов для MaxAI в Telegram',tags:['sales']},
+      {icon:'🔧',label:'Автодиагностика',goal:'Выполни полную диагностику и исправь все найденные проблемы',tags:['system']},
+    ];
+    qEl.innerHTML='<div class="sec-title"><span>⚡ Быстрый запуск агента</span></div>'
+      +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px">'
+      +quickTasks.map((t,i)=>'<button class="btn" onclick="agQuickLaunch('+i+')" style="padding:10px;height:auto;flex-direction:column;gap:4px;background:rgba(0,212,255,.04);border:1px solid rgba(0,212,255,.12);text-align:center">'
+        +'<div style="font-size:18px">'+esc(t.icon)+'</div>'
+        +'<div style="font-size:11px;font-weight:600">'+esc(t.label)+'</div>'
+        +'</button>').join('')
+      +'</div>'
+      +'<div id="ag-quick-fb" style="margin-top:8px;font-size:12px"></div>';
+    window._agQuickTasks = quickTasks;
+  }
+
   $('ag-kpis').innerHTML = [
     statCard(total||0,'Всего агентов','','stat-acc'),
     statCard(wk,'Работают','сейчас','stat-grn'),
@@ -2032,7 +2124,33 @@ async function loadTasks() {
   ]);
   const d = _qd || _td;
   if (!d) return;
-  const tasks = d.tasks||[], st = {pending: d.pending||0, running:0, completed:0, failed:0, ...(d.stats||{})};
+  const tasks = d.tasks||[], st = {pending: d.pending||0, running:0, completed:0, failed:0, ...(d.stats||{})}
+  // Running tasks card
+  const runEl=$('task-running');
+  if(runEl) {
+    const running=tasks.filter(t=>t.status==='running'||t.state==='running');
+    const pending=tasks.filter(t=>t.status==='pending'||t.state==='pending');
+    if(running.length||pending.length) {
+      runEl.innerHTML='<div class="card" style="border-left:3px solid var(--grn)">'
+        +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">'
+        +'<div class="card-title" style="margin:0"><span class="card-title-ico">▶</span>Активные задачи</div>'
+        +'<div style="display:flex;gap:6px">'+(running.length?bdg(running.length+' выполн.','g'):'')
+        +(pending.length?bdg(pending.length+' ожидают','y'):'')
+        +'</div></div>'
+        +[...running,...pending].slice(0,5).map(t=>{
+          const isRun=t.status==='running'||t.state==='running';
+          return '<div style="padding:7px;margin-bottom:4px;background:'+(isRun?'rgba(0,232,122,.06)':'rgba(255,204,0,.04)')+';border:1px solid '+(isRun?'rgba(0,232,122,.2)':'rgba(255,204,0,.15)')+';border-radius:6px;display:flex;align-items:center;gap:8px">'
+            +'<span style="font-size:13px">'+(isRun?'⚡':'⏳')+'</span>'
+            +'<div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:600;color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc((t.goal||t.title||t.description||t.objective||'...').slice(0,70))+'</div>'
+            +(t.id?'<div style="font-size:9px;color:var(--txt3)">ID: '+esc(String(t.id).slice(0,16))+'</div>':'')+'</div>'
+            +bdg(isRun?'выполн.':'ожидает',isRun?'g':'y')
+            +'</div>';
+        }).join('')
+        +'</div>';
+    } else {
+      runEl.innerHTML='';
+    }
+  };
   $('task-kpis').innerHTML = [
     statCard(tasks.length,'Задач всего','',''),
     statCard(st.running||0,'Активных','','stat-grn'),
@@ -2603,6 +2721,35 @@ async function loadLLM() {
     statCard(totalCalls,'Вызовов сегодня','','stat-acc'),
     statCard('$'+dailyCost.toFixed(4),'Расходы','из $'+dailyLim.toFixed(2),costPct<80?null:'stat-red'),
   ].join('');
+  // Routing chain card
+  const routeEl=$('llm-routing');
+  if(routeEl) {
+    const provArr=provs.map(([name,v])=>({name,v}));
+    const active2=provArr.filter(p=>p.v&&p.v.available!==false&&p.v.configured!==false);
+    const chain=provArr.sort((a,b)=>(a.v&&a.v.priority||99)-(b.v&&b.v.priority||99));
+    const provRu2={openai:'OpenAI',anthropic:'Anthropic',groq:'Groq',together:'Together AI',cohere:'Cohere',openrouter:'OpenRouter',deepseek:'DeepSeek',huggingface:'HuggingFace',hf:'HuggingFace',claude:'Claude',grok:'Grok',cerebras:'Cerebras',mistral:'Mistral',gemini:'Gemini',ollama:'Ollama'};
+    routeEl.innerHTML='<div class="card" style="background:linear-gradient(135deg,rgba(0,212,255,.02),rgba(160,96,240,.02))">'
+      +'<div class="card-title" style="margin-bottom:10px"><span class="card-title-ico">🔀</span>Маршрутизация моделей</div>'
+      +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+      +chain.slice(0,6).map((p,i)=>{
+        const ok=p.v&&p.v.available!==false&&p.v.configured!==false;
+        const isPrimary=i===0&&ok;
+        const model=String((p.v&&(p.v.model||p.v.models&&p.v.models[0]))||'').slice(0,20);
+        return (i>0?'<span style="color:var(--txt3);font-size:14px">→</span>':'')
+          +'<div style="padding:6px 10px;border-radius:8px;background:'+(isPrimary?'rgba(0,232,122,.12)':ok?'rgba(0,212,255,.06)':'rgba(255,255,255,.03)')+';border:1px solid '+(isPrimary?'rgba(0,232,122,.4)':ok?'rgba(0,212,255,.2)':'rgba(255,255,255,.07)')+';">'
+          +'<div style="font-size:11px;font-weight:700;color:'+(isPrimary?'var(--grn)':ok?'var(--acc)':'var(--txt3)')+'">'
+          +(isPrimary?'★ ':'')+esc(provRu2[p.name]||p.name)
+          +'</div>'
+          +(model?'<div style="font-size:9px;color:var(--txt3);margin-top:2px">'+esc(model)+'</div>':'')
+          +(ok?'':'<div style="font-size:9px;color:var(--red)">недоступен</div>')
+          +'</div>';
+      }).join('')
+      +(active2.length===0?'<div class="alert alert-r">⚠ Нет доступных провайдеров</div>':'')
+      +'</div>'
+      +'<div style="font-size:10px;color:var(--txt3);margin-top:8px">Активных: '+active2.length+'/'+chain.length+' • Выбирается автоматически по приоритету и лимитам</div>'
+      +'</div>';
+  }
+
   if($('llm-stats')) {
     if(v5provs.length) {
       $('llm-stats').innerHTML = v5provs.map(([name,v])=>{
@@ -2716,9 +2863,35 @@ async function loadLogs() {
   const d = await api('/api/logs?file='+encodeURIComponent(file)+'&lines='+lines);
   const el=$('log-out');
   if (!d||!d.lines) { el.textContent='Нет данных для файла: '+file; return; }
-  el.textContent = d.lines.join('\n') || 'Лог пустой';
+  window._logLines = d.lines;
+  renderLogLines(d.lines);
   el.scrollTop = el.scrollHeight;
   $('log-name-fb').textContent = file + ' (' + (d.lines.length||0) + ' строк)';
+}
+
+function renderLogLines(lines) {
+  const el=$('log-out');
+  if(!el) return;
+  el.innerHTML = lines.map(l => {
+    const s = String(l);
+    const isErr = /ERROR|CRITICAL|FATAL|Exception|Traceback|Error:/i.test(s);
+    const isWarn = /WARNING|WARN|CAUTION/i.test(s);
+    const isOk = /INFO.*OK|SUCCESS|✅|started|STARTED/i.test(s);
+    const col = isErr?'var(--red)':isWarn?'var(--yel)':isOk?'var(--grn)':'var(--txt2)';
+    return '<div style="color:'+col+';white-space:pre-wrap;word-break:break-all;line-height:1.5;padding:1px 0">'+esc(s)+'</div>';
+  }).join('');
+}
+
+function filterLogsClient(forceQ) {
+  const q = forceQ!==undefined ? forceQ : (($('log-search')&&$('log-search').value)||'');
+  if($('log-search')&&forceQ!==undefined) $('log-search').value=forceQ;
+  const lines = window._logLines || [];
+  const filtered = q ? lines.filter(l=>String(l).toLowerCase().includes(q.toLowerCase())) : lines;
+  const el=$('log-out');
+  if(!el) return;
+  renderLogLines(filtered);
+  el.scrollTop = el.scrollHeight;
+  $('log-name-fb').textContent = (q?'🔍 '+q+': ':'') + filtered.length + ' строк';
 }
 
 function toggleAutolog() {
