@@ -393,6 +393,8 @@ select.inp{cursor:pointer}
 .tab-ws-group.grp-trading .tb.on{color:#c8ffd8!important}.tab-ws-group.grp-trading .tb.on::after{background:var(--grn)}
 .tab-ws-group.grp-analytics .tb.on{color:#dcc8ff!important}.tab-ws-group.grp-analytics .tb.on::after{background:var(--pur)}
 .tab-ws-group.grp-system .tb.on{color:#ffddb8!important}.tab-ws-group.grp-system .tb.on::after{background:var(--ora)}
+.tab-ws-label.grp-finance{color:rgba(255,200,0,.3)}.tab-ws-label.grp-finance:hover{color:rgba(255,200,0,.8)}
+.tab-ws-group.grp-finance .tb.on{color:#fff4c2!important}.tab-ws-group.grp-finance .tb.on::after{background:var(--yel)}
 #tabs{background:linear-gradient(180deg,#030812,#020608);border-bottom:1px solid rgba(0,212,255,.08);box-shadow:0 2px 20px rgba(0,0,0,.8);align-items:stretch}
 .tb{border-bottom:2px solid transparent;position:relative;letter-spacing:.2px}
 .tb::after{content:"";position:absolute;bottom:-1px;left:50%;right:50%;height:2px;background:var(--acc);transition:left .2s,right .2s;border-radius:2px 2px 0 0}
@@ -458,10 +460,20 @@ body.loading #global-loader{opacity:1}
   <div class="tab-ws-group grp-trading">
     <div class="tab-ws-label grp-trading" title="Торговля">💹</div>
     <div class="tab-ws-tabs">
+      <div class="tb" onclick="go('trading')"><span class="tb-ico">📈</span>Торговля</div>
       <div class="tb" onclick="go('revenue')"><span class="tb-ico">💰</span>Доходы</div>
       <div class="tb" onclick="go('services')"><span class="tb-ico">🛍</span>Услуги</div>
       <div class="tb" onclick="go('agents')"><span class="tb-ico">🤖</span>Агенты</div>
       <div class="tb" onclick="go('tasks')"><span class="tb-ico">📋</span>Задачи</div>
+    </div>
+  </div>
+  <div class="tab-ws-group grp-finance">
+    <div class="tab-ws-label grp-finance" title="Финансы">💰</div>
+    <div class="tab-ws-tabs">
+      <div class="tb" onclick="go('arb')"><span class="tb-ico">💱</span>Арбитраж</div>
+      <div class="tb" onclick="go('money')"><span class="tb-ico">💵</span>Деньги</div>
+      <div class="tb" onclick="go('earnings')"><span class="tb-ico">💰</span>Финансы</div>
+      <div class="tb" onclick="go('sales')"><span class="tb-ico">🤝</span>Продажи</div>
     </div>
   </div>
   <div class="tab-ws-group grp-analytics">
@@ -487,11 +499,79 @@ body.loading #global-loader{opacity:1}
     <div class="tab-ws-tabs">
       <div class="tb" onclick="go('logs')"><span class="tb-ico">📜</span>Логи</div>
       <div class="tb" onclick="go('browser')"><span class="tb-ico">🖥</span>Браузер</div>
+      <div class="tb" onclick="go('email')"><span class="tb-ico">📧</span>Email</div>
+      <div class="tb" onclick="go('settings')"><span class="tb-ico">⚙️</span>Настройки</div>
       <div class="tb" onclick="go('observability')"><span class="tb-ico">📊</span>Метрики</div>
     </div>
   </div>
 </div>
 </div>
+
+<!-- ═══════════════════ WAVE-2 HTML SECTIONS ═══════════════════ -->
+
+<!-- АРБИТРАЖ ──────────────────────────────────────────────────── -->
+<div id="sc-arb" class="sc">
+  <div class="g4" id="arb-kpis"></div>
+  <div class="card" style="margin-bottom:14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div class="card-title" style="margin:0"><span class="card-title-ico">📊</span>Арбитражные возможности</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span id="arb-upd" style="font-size:10px;color:var(--txt3)"></span>
+        <button class="btn btn-sm" onclick="loadArb()">↻ Обновить</button>
+      </div>
+    </div>
+    <div id="arb-list"><div class="loading-wrap"><div class="loader"></div></div></div>
+  </div>
+</div>
+
+<!-- ДЕНЬГИ ──────────────────────────────────────────────────── -->
+<div id="sc-money" class="sc">
+  <div class="g4" id="money-kpis"></div>
+  <div class="g2" style="margin-bottom:14px">
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div class="card-title" style="margin:0"><span class="card-title-ico">📈</span>Цены и тренды</div>
+        <span id="money-upd" style="font-size:10px;color:var(--txt3)"></span>
+      </div>
+      <div id="money-prices"><div class="loading-wrap"><div class="loader"></div></div></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">⚡</span>Рыночные сигналы</div>
+      <div id="money-signals"><div class="loading-wrap"><div class="loader"></div></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ФИНАНСЫ ──────────────────────────────────────────────────── -->
+<div id="sc-earnings" class="sc">
+  <div class="g4" id="earn-kpis"></div>
+  <div class="g2" style="margin-bottom:14px">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">💼</span>Источники дохода</div>
+      <div id="earn-sources"><div class="loading-wrap"><div class="loader"></div></div></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">📋</span>Операции (Ledger)</div>
+      <div id="earn-ledger" style="max-height:320px;overflow-y:auto"><div class="loading-wrap"><div class="loader"></div></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ПРОДАЖИ ──────────────────────────────────────────────────── -->
+<div id="sc-sales" class="sc">
+  <div class="g4" id="sales-kpis"></div>
+  <div class="g2" style="margin-bottom:14px">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🎯</span>Воронка продаж</div>
+      <div id="sales-funnel"><div class="loading-wrap"><div class="loader"></div></div></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🏢</span>Бизнес-проекты</div>
+      <div id="sales-projects"><div class="loading-wrap"><div class="loader"></div></div></div>
+    </div>
+  </div>
+</div>
+
 
 <!-- ═══════════════ OBSERVABILITY ════════════════════ -->
 <div id="sc-observability" class="sc">
@@ -535,6 +615,8 @@ body.loading #global-loader{opacity:1}
     <div class="stat"><div class="loader" style="margin:8px auto 6px"></div><div class="stat-lbl">Загрузка...</div></div>
   </div>
   <!-- ── Service health strip ───────────────────────────────────────── -->
+  <div id="dash-analytics-kpis" class="g4" style="margin-bottom:14px"></div>
+  <div id="dash-system-kpis" class="g3" style="margin-bottom:14px"></div>
   <div id="dash-circuit" style="margin-bottom:10px"></div>
   <div id="dash-services" style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:14px">
     <div style="background:var(--bg2);border:1px solid var(--brd);border-radius:6px;padding:8px;text-align:center;color:var(--txt3);font-size:11px">
@@ -596,6 +678,10 @@ body.loading #global-loader{opacity:1}
     </div>
   </div>
 
+  <div class="card" style="margin-top:14px">
+    <div class="card-title"><span class="card-title-ico">💡</span>Потоки доходов (v5)</div>
+    <div id="rev-v5-streams"><div class="loading-wrap"><div class="loader"></div></div></div>
+  </div>
   <div class="card">
     <div class="card-title"><span class="card-title-ico">🌍</span>Фазы глобального роста</div>
     <div id="rev-phases"></div>
@@ -1063,6 +1149,111 @@ body.loading #global-loader{opacity:1}
 <ul id="br-checkpoints-list" style="display:none"></ul>
 <div id="br-load-overlay" style="display:none"></div>
 <input id="br-url-input" style="display:none" type="url">
+
+<!-- ═══════════════════ ТОРГОВЛЯ ═══════════════════ -->
+<div id="sc-trading" class="sc">
+  <div class="g5" id="trd-kpis"></div>
+  <div id="trd-circuit" style="margin-bottom:10px"></div>
+  <div class="g2" style="margin-bottom:14px">
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div class="card-title" style="margin:0"><span class="card-title-ico">📈</span>Открытые позиции</div>
+        <button class="btn btn-sm" onclick="loadTrading()">↻ Refresh</button>
+      </div>
+      <div id="trd-positions"><div class="loading-wrap"><div class="loader"></div></div></div>
+    </div>
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div class="card-title" style="margin:0"><span class="card-title-ico">🔮</span>Сигналы (15m)</div>
+        <div id="trd-last-upd" style="font-size:10px;color:var(--txt3)"></div>
+      </div>
+      <div id="trd-signals"><div class="loading-wrap"><div class="loader"></div></div></div>
+    </div>
+  </div>
+  <div class="g2" style="margin-bottom:14px">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">⚙️</span>Стратегии</div>
+      <div id="trd-strategies"><div class="loading-wrap"><div class="loader"></div></div></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">📊</span>PnL история</div>
+      <div id="trd-pnl-history"><div class="loading-wrap"><div class="loader"></div></div></div>
+    </div>
+  </div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">💰</span>Баланс и маржа</div>
+      <div id="trd-balance"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">📋</span>История сделок</div>
+      <div id="trd-history" style="max-height:240px;overflow-y:auto"></div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <div class="card-title"><span class="card-title-ico">🎛</span>Управление торговлей</div>
+    <div id="trd-controls"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════ EMAIL ═══════════════════ -->
+<div id="sc-email" class="sc">
+  <div class="g4" id="em-kpis"></div>
+  <div class="g2" style="margin-bottom:14px">
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div class="card-title" style="margin:0"><span class="card-title-ico">📧</span>Входящие</div>
+        <button class="btn btn-sm" onclick="loadEmail()">↻ Обновить</button>
+      </div>
+      <div id="em-inbox" style="max-height:420px;overflow-y:auto"><div class="loading-wrap"><div class="loader"></div></div></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🔑</span>Найденные API ключи</div>
+      <div id="em-keys"><div class="loading-wrap"><div class="loader"></div></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ НАСТРОЙКИ ═══════════════════ -->
+<div id="sc-settings" class="sc">
+  <div class="g4" id="set-kpis"></div>
+  <div class="g2" style="margin-bottom:14px">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🤖</span>ИИ Провайдеры</div>
+      <div id="set-providers"><div class="loading-wrap"><div class="loader"></div></div></div>
+      <div style="margin-top:12px">
+        <div style="font-size:11px;color:var(--txt3);margin-bottom:6px">Тест модели:</div>
+        <div style="display:flex;gap:6px">
+          <input class="inp" id="set-test-msg" value="Привет! Назови свою модель." style="flex:1;font-size:12px">
+          <button class="btn btn-g" onclick="testLLM()">▶ Тест</button>
+        </div>
+        <div class="logbox" id="set-test-res" style="height:64px;margin-top:6px;font-size:11px">Результат теста...</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">⚙️</span>Системные параметры</div>
+      <div id="set-params"></div>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-y" onclick="systemAction('restart_brain')">↻ Рестарт Brain</button>
+        <button class="btn btn-r" onclick="systemAction('emergency_stop')">⛔ Стоп всё</button>
+        <button class="btn" onclick="loadSettings()">↻ Обновить</button>
+      </div>
+      <div id="set-action-fb" style="margin-top:8px;font-size:12px"></div>
+    </div>
+  </div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">🔑</span>Статус ключей</div>
+      <div id="set-keys"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">📊</span>Метрики системы</div>
+      <div id="set-metrics"></div>
+    </div>
+  </div>
+</div>
+
+
 <!-- ═══════════════════ JAVASCRIPT ═══════════════════ -->
 <script>
 'use strict';
@@ -1151,7 +1342,7 @@ refreshHeader();
 setInterval(refreshHeader, 20000);
 
 // ─── Tab switching ─────────────────────────────────────────────────────────
-const TABS = ['dash','revenue','services','agents','tasks','quality','failures','evolution','platforms','skills','scout','llm','chat','logs','browser'];
+const TABS = ['dash','trading','revenue','services','agents','tasks','arb','money','earnings','sales','quality','failures','evolution','platforms','skills','scout','llm','chat','logs','browser','email','settings'];
 
 // Russian status label map
 const RU_STATUS = {
@@ -1184,10 +1375,12 @@ function go(tab) {
 }
 function loadTab(t) {
   const m = {
-    dash:loadDash, revenue:loadRevenue, services:loadServicesShop, agents:loadAgents, tasks:loadTasks,
+    dash:loadDash, trading:loadTrading, revenue:loadRevenue, services:loadServicesShop, agents:loadAgents, tasks:loadTasks,
+    arb:loadArb, money:loadMoney, earnings:loadEarnings, sales:loadSales,
     quality:loadQuality, failures:loadFailures, evolution:loadEvolution,
     platforms:loadPlatforms, skills:loadSkills, scout:loadScout,
-    llm:loadLLM, chat:()=>{}, logs:loadLogs, browser:loadBrowser
+    llm:loadLLM, chat:()=>{}, logs:loadLogs, browser:loadBrowser,
+    email:loadEmail, settings:loadSettings
   };
   if (m[t]) m[t]();
 }
@@ -1225,6 +1418,27 @@ async function loadDash() {
       statCard('$'+fmtN(tr.balance_usdt||0), 'Баланс Bybit', tr.online?'онлайн':'офлайн', 'stat-grn'),
       statCard((trPnl>=0?'+':'')+fmtN(trPnl)+'$', 'PnL сегодня', (tr.daily_pnl_pct||0).toFixed(2)+'%', trPnl>=0?'stat-grn':'stat-red'),
     ].join('');
+    // Analytics summary stats
+    api('/api/analytics/summary').then(an=>{
+      if(!an) return;
+      const anEl=$('dash-analytics-kpis');
+      if(anEl) anEl.innerHTML=[
+        statCard(fmtN(an.knowledge_entries||0),'База знаний','записей','stat-acc'),
+        statCard((an.uptime_hours||0).toFixed(1)+'ч','Аптайм','',(an.uptime_hours||0)>24?'stat-grn':null),
+        statCard(an.errors_today||0,'Ошибок сегодня','',( an.errors_today||0)>0?'stat-red':null),
+        statCard(an.messages_today||0,'Сообщений','сегодня',null),
+      ].join('');
+      api('/api/v5/analytics').then(av5=>{
+        if(!av5||!av5.system) return;
+        const sys=av5.system;
+        const sysEl=$('dash-system-kpis');
+        if(sysEl) sysEl.innerHTML=[
+          statCard((sys.cpu||0).toFixed(1)+'%','CPU','',(sys.cpu||0)>80?'stat-red':(sys.cpu||0)>50?'stat-yel':'stat-grn'),
+          statCard(((sys.ram_mb||0)/1024).toFixed(1)+'GB','RAM','',(sys.ram_mb||0)>3500?'stat-red':null),
+          statCard(sys.brain_log_lines||0,'Лог строк','brain',null),
+        ].join('');
+      });
+    });
 
     const statusMap = {ok:'g', error:'r', degraded:'y'};
     $('dash-params').innerHTML = [
@@ -1464,11 +1678,31 @@ function openInBrowser(url) {
 //  ДОХОДЫ
 // ═══════════════════════════════════════════════════════════════════════════
 async function loadRevenue() {
-  // Load real revenue data from /api/revenue
-  const [rv, hyp] = await Promise.all([
-    api('/api/revenue'),
-    api(HYP+'/api/v1/revenue/radar').catch(()=>null)
+  // Load real revenue data from /api/revenue and /api/v5/earnings
+  const [rv, hyp, v5e] = await Promise.all([
+    api('/api/revenue').catch(()=>null),
+    api(HYP+'/api/v1/revenue/radar').catch(()=>null),
+    api('/api/v5/earnings').catch(()=>null)
   ]);
+  // Display v5 earnings streams in a supplementary card if available
+  if(v5e&&v5e.streams&&v5e.streams.length) {
+    const v5Card=$('rev-v5-streams');
+    if(v5Card) v5Card.innerHTML=v5e.streams.map(s=>{
+      const active=s.status==='active',setup=s.status==='setup',scan=s.status==='scanning';
+      const stCol=active?'g':setup?'y':scan?'b':'r';
+      const stRu=active?'LIVE':setup?'Настройка':scan?'Сканирование':'СТОП';
+      return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.04)">'
+        +'<div style="display:flex;align-items:center;gap:8px">'
+        +'<span style="font-size:16px">'+esc(s.icon||'💰')+'</span>'
+        +'<div><div style="font-size:12px;font-weight:700">'+esc(s.name||'')+'</div>'
+        +(s.currency?'<div style="font-size:10px;color:var(--txt3)">'+esc(s.currency)+'</div>':'')+'</div>'
+        +'</div>'
+        +'<div style="display:flex;align-items:center;gap:6px">'
+        +(s.amount?'<span style="color:var(--grn);font-weight:700">$'+(+s.amount).toFixed(2)+'</span>':'')
+        +bdg(stRu,stCol)
+        +'</div></div>';
+    }).join('');
+  }
 
   if (!rv && !hyp) { showNoData(['rev-kpis','rev-tbl','rev-phases']); return; }
 
@@ -1563,40 +1797,66 @@ async function loadRevenue() {
 //  АГЕНТЫ
 // ═══════════════════════════════════════════════════════════════════════════
 async function loadAgents() {
-  const [lo, lh] = await Promise.all([api('/api/agents'), api(HYP+'/api/v1/agents/fleet')]);
-  const fleet = lh?(lh.fleet||[]):(lo?(lo.agents||[]):[]);
-  const total = lh?lh.total_agents:fleet.length;
+  const [lo, lh, v5ag] = await Promise.all([
+    api('/api/agents').catch(()=>null),
+    api(HYP+'/api/v1/agents/fleet').catch(()=>null),
+    api('/api/v5/agents/stats').catch(()=>null)
+  ]);
+  const fleet = lh?(lh.fleet||[]):(v5ag?(v5ag.details||[]):(lo?(lo.agents||[]):[]));
+  const total = lh?lh.total_agents:(v5ag?v5ag.total:fleet.length);
   const byR = lh?(lh.by_rank||{}):{};
   const byD = lh?(lh.by_department||{}):{};
   const avgQ = lh?(lh.avg_quality||0):0;
+  const wk = v5ag?(v5ag.working||0):fleet.filter(a=>a.status==='working'||a.status==='running').length;
+  const idl = v5ag?(v5ag.idle||0):fleet.filter(a=>a.status==='idle').length;
+  const errA = v5ag?(v5ag.error||0):fleet.filter(a=>a.status==='error').length;
 
   $('ag-kpis').innerHTML = [
     statCard(total||0,'Всего агентов','','stat-acc'),
-    statCard(avgQ,'Ср. качество','/100',avgQ>=80?'stat-grn':''),
-    statCard(byR.ELITE||0,'Элитных','уровень ELITE','stat-pur'),
-    statCard(Object.keys(byD).length,'Отделов','',''),
+    statCard(wk,'Работают','сейчас','stat-grn'),
+    statCard(idl,'Готовы','ожидание',null),
+    statCard(errA,'Ошибок','',errA>0?'stat-red':null),
   ].join('');
 
   const rCls = {ELITE:'p',SENIOR:'b',MID:'g',JUNIOR:'y'};
   const rName = {ELITE:'Элита',SENIOR:'Старший',MID:'Средний',JUNIOR:'Новичок'};
-  $('ag-rank').innerHTML = Object.entries(byR).map(([r,n]) =>
-    `<div class="row"><span class="row-left">${bdg(rName[r]||r, rCls[r]||'b')}</span><b style="color:#ddeeff;font-size:14px">${n}</b></div>`
-  ).join('') || '<div style="color:var(--txt3);padding:10px;font-size:12px">Данные по уровням недоступны</div>';
-
-  $('ag-dept').innerHTML = Object.entries(byD).map(([dep,n]) =>
-    `<div class="row"><span class="row-left">${esc(dep)}</span><span style="color:var(--acc);font-weight:700">${n}</span></div>`
-  ).join('') || '<div style="color:var(--txt3);padding:10px;font-size:12px">Данные по отделам недоступны</div>';
+  // If no HYP data, build rank/dept from v5 priority
+  if(Object.keys(byR).length) {
+    $('ag-rank').innerHTML = Object.entries(byR).map(([r,n]) =>
+      `<div class="row"><span class="row-left">${bdg(rName[r]||r, rCls[r]||'b')}</span><b style="color:#ddeeff;font-size:14px">${n}</b></div>`
+    ).join('');
+  } else {
+    // Build priority histogram from v5 details
+    const priMap={};
+    fleet.forEach(a=>{ const p='P'+(a.priority||3); priMap[p]=(priMap[p]||0)+1; });
+    $('ag-rank').innerHTML=Object.entries(priMap).map(([p,n])=>'<div class="row"><span class="row-left">'+bdg(p,'b')+'</span><b style="color:#ddeeff;font-size:14px">'+n+'</b></div>').join('')||'<div style="color:var(--txt3);padding:10px;font-size:12px">Нет данных</div>';
+  }
+  if(Object.keys(byD).length) {
+    $('ag-dept').innerHTML = Object.entries(byD).map(([dep,n]) =>
+      `<div class="row"><span class="row-left">${esc(dep)}</span><span style="color:var(--acc);font-weight:700">${n}</span></div>`
+    ).join('');
+  } else {
+    // Group by first keyword if available
+    const kwMap={};
+    fleet.forEach(a=>{ const kw=(a.keywords&&a.keywords[0])||'general'; kwMap[kw]=(kwMap[kw]||0)+1; });
+    const top10=Object.entries(kwMap).sort((a,b)=>b[1]-a[1]).slice(0,10);
+    $('ag-dept').innerHTML=top10.map(([kw,n])=>'<div class="row"><span class="row-left">'+esc(kw)+'</span><span style="color:var(--acc);font-weight:700">'+n+'</span></div>').join('')||'<div style="color:var(--txt3);padding:10px;font-size:12px">Нет данных</div>';
+  }
 
   $('ag-tbl').innerHTML = fleet.slice(0,120).map(a => {
     const q = +(a.quality_score||0);
     const qc = q>=90?'#00d880':q>=75?'#3ab8e8':q>=60?'#ffb800':'#ff3050';
+    const stCol = (a.status==='working'||a.status==='running'||a.status==='active')?'g':(a.status==='error'?'r':'y');
+    const stRu = (a.status==='working'||a.status==='running')?'работает':(a.status==='idle'?'готов':(a.status==='active'?'активен':(a.status==='error'?'ошибка':a.status||'?')));
+    const kws = (a.keywords||[]).slice(0,3).join(', ');
+    const pri = a.priority!=null?`P${a.priority}`:(rName[a.rank]||a.rank||'MID');
     return `<tr>
       <td style="font-family:'Consolas',monospace;font-size:11px;color:#ddeeff">${esc(a.name||a.file||'?')}</td>
-      <td style="font-size:11px;color:var(--txt2)">${esc(a.department||'—')}</td>
-      <td>${bdg(rName[a.rank]||a.rank||'MID', rCls[a.rank||'MID']||'b')}</td>
-      <td><span style="color:${qc};font-weight:700">${q||'—'}</span></td>
-      <td>${bdg(a.status==='active'?'активен':a.status||'?', a.status==='active'?'g':'y')}</td>
-      <td style="font-size:11px;color:var(--txt3);max-width:200px">${esc((a.desc||a.schedule||'—').slice(0,50))}</td>
+      <td style="font-size:11px;color:var(--txt2)">${esc(a.department||pri||'—')}</td>
+      <td>${bdg(pri, rCls[a.rank||'MID']||'b')}</td>
+      <td><span style="color:${q?qc:'var(--txt3)'};font-weight:700">${q||'—'}</span></td>
+      <td>${bdg(stRu, stCol)}</td>
+      <td style="font-size:11px;color:var(--txt3);max-width:200px">${esc((a.desc||a.description||kws||a.schedule||'—').slice(0,50))}</td>
     </tr>`;
   }).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--txt3)">Нет данных о флоте агентов</td></tr>';
 }
@@ -1665,6 +1925,21 @@ async function loadQuality() {
   // Fallback to local quality API
   if (!ql) { ql = await api('/api/quality').catch(()=>null); }
 
+  // Analytics fallback for Quality tab
+  if(!ql) {
+    api('/api/analytics/summary').then(an=>{
+      if(!an) return;
+      if($('ql-kpis')) $('ql-kpis').innerHTML=[
+        statCard((an.uptime_hours||0).toFixed(1)+'ч','Аптайм системы','',(an.uptime_hours||0)>24?'stat-grn':null),
+        statCard(an.errors_today||0,'Ошибок сегодня','',( an.errors_today||0)>0?'stat-red':'stat-grn'),
+        statCard(an.messages_today||0,'Сообщений','сегодня','stat-acc'),
+        statCard(an.llm_calls||0,'LLM вызовов','','stat-acc'),
+      ].join('');
+      if($('ql-grades')) $('ql-grades').innerHTML='<div class="alert alert-b">ℹ Quality Guardian запускается каждые 6ч. Статистика системы:</div>'
+        +Object.entries({Аптайм:(an.uptime_hours||0).toFixed(1)+'ч',Сообщений:an.messages_today||0,'LLM вызовов':an.llm_calls||0,'База знаний':(an.knowledge_entries||0)+' записей'}).map(([k,v])=>'<div class="row"><span class="row-left">'+esc(k)+'</span><b style="color:var(--acc)">'+esc(String(v))+'</b></div>').join('');
+      if($('ql-backlog')) $('ql-backlog').innerHTML='<div class="alert alert-g">✅ Очередь пуста — аудит не запускался</div>';
+    });
+  }
   if (ql) {
     const g=ql.grade_distribution||{}, bl=ql.improvement_backlog||[];
     const avg=ql.avg_score||0;
@@ -1726,9 +2001,31 @@ async function loadQuality() {
 // ═══════════════════════════════════════════════════════════════════════════
 async function loadFailures() {
   const [fc,lg] = await Promise.all([
-    api(HYP+'/api/v1/failures/clusters'),
-    api(HYP+'/api/v1/ledger')
+    api(HYP+'/api/v1/failures/clusters').catch(()=>null),
+    api(HYP+'/api/v1/ledger').catch(()=>null)
   ]);
+  if(!fc&&!lg) {
+    // Fallback: show services health
+    const [sh,an]=await Promise.all([
+      api('/api/services/health').catch(()=>null),
+      api('/api/analytics/summary').catch(()=>null)
+    ]);
+    if($('fail-kpis')) $('fail-kpis').innerHTML=[
+      statCard(an?an.errors_today||0:0,'Ошибок сегодня','',( an&&(an.errors_today||0)>0)?'stat-red':'stat-grn'),
+      statCard(sh?Object.values(sh).filter(s=>s.ok!==false).length:0,'Сервисов OK','','stat-grn'),
+      statCard(sh?Object.values(sh).filter(s=>s.ok===false).length:0,'Сервисов с ошибкой','',0>0?'stat-red':null),
+      statCard(an?(an.uptime_hours||0).toFixed(1)+'ч':'—','Аптайм системы','','stat-acc'),
+    ].join('');
+    if($('fail-tbl')&&sh) $('fail-tbl').innerHTML=Object.entries(sh).map(([k,v])=>'<tr>'
+      +'<td style="font-family:monospace;font-size:11px;color:var(--acc)">'+esc(k)+'</td>'
+      +'<td style="font-size:11px">'+esc(v.label||v.name||k)+'</td>'
+      +'<td style="font-size:10px;color:var(--txt3)">'+esc(v.status||'—')+'</td>'
+      +'<td>—</td><td>—</td>'
+      +'<td>'+bdg(v.ok!==false?'активен':'ошибка',v.ok!==false?'g':'r')+'</td>'
+      +'</tr>').join('');
+    if($('lgr-tbl')) $('lgr-tbl').innerHTML='<tr><td colspan="5" style="text-align:center;padding:14px;color:var(--txt3)">Журнал пуст — Hyperion не подключён</td></tr>';
+    return;
+  }
 
   if (fc) {
     const cl=fc.clusters||[], active=cl.filter(c=>!c.suppressed).length;
@@ -1788,8 +2085,24 @@ async function doIncident(action) {
 //  ЭВОЛЮЦИЯ
 // ═══════════════════════════════════════════════════════════════════════════
 async function loadEvolution() {
-  const d = await api(HYP+'/api/v1/evolution/arena');
-  if (!d) return;
+  const d = await api(HYP+'/api/v1/evolution/arena').catch(()=>null);
+  if (!d) {
+    // Fallback: show agents stats + analytics as evolution data
+    const [v5,an]=await Promise.all([
+      api('/api/v5/agents/stats').catch(()=>null),
+      api('/api/analytics/summary').catch(()=>null)
+    ]);
+    if($('ev-kpis')) $('ev-kpis').innerHTML=[
+      statCard(v5?v5.total:0,'Агентов создано','в системе','stat-grn'),
+      statCard(v5?v5.idle:0,'Готовы к работе','','stat-acc'),
+      statCard(an?(an.uptime_hours||0).toFixed(1)+'ч':'—','Аптайм','','stat-grn'),
+      statCard(an?an.knowledge_entries||0:0,'База знаний','записей','stat-acc'),
+    ].join('');
+    const dets=(v5&&v5.details)||[];
+    if($('ev-wish')) $('ev-wish').innerHTML=dets.slice(0,10).map(a=>'<div class="row"><span class="row-left" style="font-size:11px">'+esc(a.name||'')+'</span>'+bdg('P'+(a.priority||3),'b')+'</div>').join('') || '<div style="color:var(--txt3);padding:10px;font-size:12px">Загрузка...</div>';
+    if($('ev-made')) $('ev-made').innerHTML=dets.slice(10,20).map(a=>'<div class="row"><span class="row-left" style="color:var(--grn);font-size:11px">✓ '+esc(a.name||'')+'</span>'+bdg(a.status||'idle','g')+'</div>').join('') || '<div style="color:var(--txt3);padding:10px;font-size:12px">Ни одного агента ещё не создано</div>';
+    return;
+  }
   const wl=d.wishlist||[], cr=d.recently_created||[];
 
   $('ev-kpis').innerHTML = [
@@ -1812,9 +2125,35 @@ async function loadEvolution() {
 //  ПЛАТФОРМЫ
 // ═══════════════════════════════════════════════════════════════════════════
 async function loadPlatforms() {
-  const d = window.__PL__ || await api(HYP+'/api/v2/fleet/control');
+  const d = window.__PL__ || await api(HYP+'/api/v2/fleet/control').catch(()=>null);
   window.__PL__ = null;
-  if (!d) return;
+  if (!d) {
+    // Fallback: use local /api/v1/platforms
+    const pdL=await api('/api/v1/platforms').catch(()=>null);
+    if(!pdL) return;
+    const s=pdL.summary||{};
+    if($('pl-kpis')) $('pl-kpis').innerHTML=[
+      statCard(s.ok||0,'Зарегистрировано','платформ','stat-grn'),
+      statCard(s.pending||0,'Ожидают верифик.','','stat-yel'),
+      statCard(s.not_done||0,'Не готовы','нужна работа',null),
+      statCard((pdL.assets||[]).length,'Assets','файлов','stat-acc'),
+    ].join('');
+    const stC={logged_in:'g',registered:'g',already_exists:'g',bot_created:'g',agent_created:'g',verify_email:'y',partial:'y',login_attempted:'y',no_form_found:'r',captcha_blocked:'r',error:'r',unknown:'r',not_started:'r'};
+    const stL={logged_in:'✅ Залогинен',registered:'✅ Зарег.',already_exists:'✅ Есть',verify_email:'📧 Верифик.',partial:'⏳ Частично',login_attempted:'⏳ Вход',no_form_found:'❌ Форма',captcha_blocked:'⛔ Каптча',error:'❌ Ошибка',unknown:'❓',not_started:'⬜ Нет'};
+    if($('pl-reg-kpis')) $('pl-reg-kpis').innerHTML=[
+      statCard(s.ok||0,'OK','из '+s.total,'stat-grn'),
+      statCard(s.pending||0,'Ожидают','','stat-yel'),
+      statCard(s.not_done||0,'Не готовы','',''),
+      statCard(s.total||0,'Всего','платформ','stat-acc'),
+    ].join('');
+    if($('pl-reg-tbl')) $('pl-reg-tbl').innerHTML=(pdL.platforms||[]).slice(0,30).map(p=>'<tr>'
+      +'<td style="font-family:\'Consolas\',monospace;font-weight:700;color:var(--acc)">'+esc(p.name)+'</td>'
+      +'<td>'+bdg(stL[p.status]||p.status||'?',stC[p.status]||'y')+'</td>'
+      +'<td style="font-size:10px;color:var(--txt3)">'+esc(String(p.note||'').slice(0,60))+'</td>'
+      +'</tr>').join('');
+    if($('pl-api-list')) $('pl-api-list').innerHTML=(pdL.api_endpoints||[]).map(ep=>'<div style="font-size:12px;font-family:monospace;padding:2px 0;color:var(--acc)">'+esc(ep)+'</div>').join('');
+    return;
+  }
   const adp=d.adapters||[], cl=d.clusters||[];
 
   $('pl-kpis').innerHTML = [
@@ -1885,8 +2224,28 @@ async function loadPlatforms() {
   // Registration status section
 
 async function loadSkills() {
-  const d = await api(HYP+'/api/v2/skillgraph');
-  if (!d) return;
+  const d = await api(HYP+'/api/v2/skillgraph').catch(()=>null);
+  if (!d) {
+    // Fallback: show agent list as skills
+    const v5=await api('/api/v5/agents/stats').catch(()=>null);
+    const dets=(v5&&v5.details)||[];
+    if($('sk-kpis')) $('sk-kpis').innerHTML=[
+      statCard(v5?v5.total:0,'Агентов-навыков','','stat-acc'),
+      statCard(v5?v5.idle:0,'Готовы','','stat-grn'),
+      statCard(dets.filter(a=>a.keywords&&a.keywords.length).length,'С ключевыми словами','',''),
+      statCard('—','Бюджет сегодня','',''),
+    ].join('');
+    if($('sk-top')) $('sk-top').innerHTML=dets.slice(0,12).map((a,i)=>{
+      const kws=(a.keywords||[]).slice(0,3).join(', ');
+      return '<div class="skill-item">'
+        +'<span class="skill-rank">'+(i+1)+'</span>'
+        +'<span class="skill-name">'+esc(a.name||'')+(kws?' <span style="font-size:9px;color:var(--txt3)">'+esc(kws)+'</span>':'')+'</span>'
+        +'<span class="skill-ev" style="color:var(--acc)">P'+(a.priority||3)+'</span>'
+        +'</div>';
+    }).join('');
+    if($('sk-divs')) $('sk-divs').innerHTML='<div style="color:var(--txt3);padding:10px;font-size:12px">ℹ Данные Hyperion недоступны. Показаны агенты из базы ('+dets.length+' шт.)</div>';
+    return;
+  }
   const g=d.skill_graph||{}, dv=d.divisions||{}, top=d.top_ev_opportunities||[];
   const pipe=(d.pipeline||{}).strategic||{};
 
@@ -1917,8 +2276,32 @@ async function loadSkills() {
 //  СКАУТ
 // ═══════════════════════════════════════════════════════════════════════════
 async function loadScout() {
-  const d = await api(HYP+'/api/v2/scout/status');
-  if (!d) return;
+  const d = await api(HYP+'/api/v2/scout/status').catch(()=>null);
+  if (!d) {
+    // Fallback: market scouting from local APIs
+    const [arb,sigs]=await Promise.all([
+      api('/api/arbitrage/live').catch(()=>null),
+      api('/api/money/signals').catch(()=>null)
+    ]);
+    const opps=(arb&&arb.opportunities)||[];
+    const sigArr=(sigs&&sigs.signals)||[];
+    if($('sct-kpis')) $('sct-kpis').innerHTML=[
+      statCard(opps.length,'Арбитраж-возможностей','','stat-grn'),
+      statCard(opps.filter(o=>o.tradeable!==false).length,'Торгуемых','','stat-acc'),
+      statCard(sigArr.length,'Сигналов рынка','',''),
+      statCard(sigArr.filter(s=>s.signal&&!/HOLD/i.test(s.signal)).length,'Активных сигналов','','stat-yel'),
+    ].join('');
+    const domains=['арбитраж','spot-perp','funding','momentum','mean_reversion'];
+    if($('sct-domains')) $('sct-domains').innerHTML=domains.map(d=>'<div class="row"><span class="row-left" style="font-size:11px">'+esc(d)+'</span>'+bdg('активен','g')+'</div>').join('');
+    if($('sct-finds')) $('sct-finds').innerHTML=opps.slice(0,6).map(o=>{
+      const p=(+(o.profit_est||0)/100).toFixed(2);
+      return '<div style="margin-bottom:10px;padding:8px;background:#030810;border-radius:6px;border-left:3px solid var(--grn)">'
+        +'<div style="color:var(--grn);font-size:11px;font-weight:700;margin-bottom:3px">'+esc(o.symbol||'')+ ' — '+esc(o.direction||'arb')+'</div>'
+        +'<div style="color:var(--txt2);font-size:11px">Прибыль: '+p+'% | spread: '+(+(o.spread_pct||0)).toFixed(3)+'% | '+bdg(o.tradeable?'Торгуемо':'Нет','g')+'</div>'
+        +'</div>';
+    }).join('') || '<div style="color:var(--txt3);padding:10px">Нет данных</div>';
+    return;
+  }
   const lr=d.latest_run||{}, doms=d.research_domains||[];
 
   $('sct-kpis').innerHTML = [
@@ -1975,7 +2358,7 @@ async function loadLLM() {
     statCard(st?(st.groq_only_mode?'ВКЛ':'ВЫКЛ'):'—','Режим Groq-only',st&&st.groq_only_mode?'экономия токенов':'',''),
   ].join('');
 
-  const provRu = {openai:'OpenAI',anthropic:'Anthropic',groq:'Groq',together:'Together AI',cohere:'Cohere'};
+  const provRu = {openai:'OpenAI',anthropic:'Anthropic',groq:'Groq',together:'Together AI',cohere:'Cohere',openrouter:'OpenRouter',deepseek:'DeepSeek',huggingface:'HuggingFace',hf:'HuggingFace'};
   $('llm-prov').innerHTML = provs.map(([name,v]) => {
     if (!v||typeof v!=='object') return `<div class="row"><span class="row-left">${dot(false)}<span>${esc(provRu[name]||name)}</span></span>${bdg('N/A','y')}</div>`;
     const configured = v.configured !== false;
@@ -2423,7 +2806,7 @@ function showToast(msg,type,icon,dur){
   setTimeout(function(){t.style.animation="toastIn .3s reverse forwards";setTimeout(function(){if(t.parentNode)t.parentNode.removeChild(t);},350);},dur||3500);
 }
 // OMEGA v21: HYDRATION
-var _hFns={"observability":obsRefresh,dash:function(){if(typeof loadDash!='undefined')loadDash();},revenue:function(){if(typeof loadRevenue!='undefined')loadRevenue();},agents:function(){if(typeof loadAgents!='undefined')loadAgents();},tasks:function(){if(typeof loadTasks!='undefined')loadTasks();},services:function(){if(typeof loadServicesShop!='undefined')loadServicesShop();},llm:function(){if(typeof loadLLM!='undefined')loadLLM();},logs:function(){if(typeof loadLogs!='undefined')loadLogs();},quality:function(){if(typeof loadQuality!='undefined')loadQuality();},browser:function(){if(typeof brInitBookmarks!='undefined')brInitBookmarks();}};
+var _hFns={"observability":obsRefresh,trading:function(){if(typeof loadTrading!="undefined")loadTrading();},email:function(){if(typeof loadEmail!="undefined")loadEmail();},settings:function(){if(typeof loadSettings!="undefined")loadSettings();},arb:function(){if(typeof loadArb!="undefined")loadArb();},money:function(){if(typeof loadMoney!="undefined")loadMoney();},earnings:function(){if(typeof loadEarnings!="undefined")loadEarnings();},sales:function(){if(typeof loadSales!="undefined")loadSales();},dash:function(){if(typeof loadDash!='undefined')loadDash();},revenue:function(){if(typeof loadRevenue!='undefined')loadRevenue();},agents:function(){if(typeof loadAgents!='undefined')loadAgents();},tasks:function(){if(typeof loadTasks!='undefined')loadTasks();},services:function(){if(typeof loadServicesShop!='undefined')loadServicesShop();},llm:function(){if(typeof loadLLM!='undefined')loadLLM();},logs:function(){if(typeof loadLogs!='undefined')loadLogs();},quality:function(){if(typeof loadQuality!='undefined')loadQuality();},browser:function(){if(typeof brInitBookmarks!='undefined')brInitBookmarks();}};
 var _hT={};
 document.addEventListener("DOMContentLoaded",function(){
   document.querySelectorAll(".tb").forEach(function(tb){
@@ -2467,6 +2850,697 @@ function pauseProceed(pid){
         card.innerHTML="<div class='pause-card-title' style='color:var(--grn)'>\u2705 \u0410\u0433\u0435\u043d\u0442 \u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0430\u0435\u0442</div>";}
       showToast("\u0410\u0433\u0435\u043d\u0442 \u0432\u043e\u0437\u043e\u0431\u043d\u043e\u0432\u0438\u043b \u0440\u0430\u0431\u043e\u0442\u0443","g","\u25b6\ufe0f");
     }).catch(function(e){showToast("\u041e\u0448\u0438\u0431\u043a\u0430: "+e,"r","\u274c");});
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+//  ТОРГОВЛЯ — loadTrading
+// ═══════════════════════════════════════════════════════════════
+async function loadTrading() {
+  const [pos, sig, bal, strats, pnl, hist] = await Promise.all([
+    api('/api/trading/positions'),
+    api('/api/trading/signals'),
+    api('/api/trading/balance'),
+    api('/api/bybit/strategies'),
+    api('/api/trading/pnl'),
+    api('/api/trading/history'),
+  ]);
+
+  const b = (bal&&bal.balance_usdt!==undefined)?bal:(bal||{});
+  const trPnl = +(pnl&&(pnl.daily_pnl||pnl.daily_pnl_usdt)||0);
+  const positions = (pos&&pos.positions)||[];
+  const stratList = Array.isArray(strats)?strats
+    :Array.isArray(strats&&strats.strategies)?strats.strategies
+    :(strats&&typeof strats==='object'?Object.entries(strats).map(([k,v])=>Object.assign({name:k},typeof v==='object'&&v?v:{})):[]);
+  const enabledCount = stratList.filter(s=>s.enabled!==false).length;
+
+  const kpis=$('trd-kpis');
+  if(kpis) kpis.innerHTML=[
+    statCard('$'+(+(b.balance_usdt||b.balance||b.total||0)).toFixed(2),'Баланс USDT',b.account_type||'','stat-grn'),
+    statCard('$'+(+(b.available_balance||b.available||b.free||0)).toFixed(2),'Свободно',''),
+    statCard(positions.length,'Позиций',positions.length>0?'открыто':'нет',''),
+    statCard((trPnl>=0?'+':'')+fmtN(trPnl)+'$','PnL сегодня',
+      (pnl&&pnl.daily_pnl_pct!=null?(+(pnl.daily_pnl_pct||0)).toFixed(2)+'%':''),trPnl>=0?'stat-grn':'stat-red'),
+    statCard(enabledCount+'/'+stratList.length,'Стратегий ВКЛ','',enabledCount>0?'stat-acc':''),
+  ].join('');
+
+  // Positions
+  const posEl=$('trd-positions');
+  if(posEl){
+    if(positions.length){
+      posEl.innerHTML=positions.map(p=>{
+        const g=(+(p.pnl||p.unrealised_pnl||0))>=0;
+        const pv=+(p.pnl||p.unrealised_pnl||0);
+        const col=p.side==='Buy'?'var(--grn)':'var(--red)';
+        return '<div style="padding:10px;margin-bottom:8px;border:1px solid '+(g?'rgba(0,232,122,.25)':'rgba(255,45,85,.25)')
+          +';background:'+(g?'rgba(0,232,122,.05)':'rgba(255,45,85,.05)')+';border-radius:10px">'
+          +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
+          +'<span style="font-weight:800;font-size:14px;color:'+col+'">'+(p.side==='Buy'?'▲ LONG':'▼ SHORT')+' '+esc(p.symbol||'')+'</span>'
+          +'<span style="font-size:16px;font-weight:800;color:'+(g?'var(--grn)':'var(--red)')+'">'+(g?'+':'')+fmtN(pv)+'$</span>'
+          +'</div>'
+          +'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;font-size:10px;color:var(--txt3)">'
+          +'<div><div>Вход</div><div style="color:var(--txt);font-weight:600">'+(+(p.entry_price||0)).toFixed(3)+'</div></div>'
+          +'<div><div>Текущая</div><div style="color:var(--txt);font-weight:600">'+(+(p.mark_price||p.current_price||0)).toFixed(3)+'</div></div>'
+          +'<div><div>Кол-во</div><div style="color:var(--txt);font-weight:600">'+esc(String(p.size||p.qty||0))+'</div></div>'
+          +'<div><div>Плечо</div><div style="color:var(--acc);font-weight:600">\xd7'+esc(String(p.leverage||1))+'</div></div>'
+          +'</div>'
+          +((p.stop_loss||p.take_profit)?'<div style="font-size:10px;margin-top:6px;display:flex;gap:12px">'
+            +(p.stop_loss?'<span style="color:#f87171">SL: '+(+(p.stop_loss||0)).toFixed(3)+'</span>':'')
+            +(p.take_profit?'<span style="color:#4ade80">TP: '+(+(p.take_profit||0)).toFixed(3)+'</span>':'')+'</div>':'')
+          +'</div>';
+      }).join('');
+    } else {
+      posEl.innerHTML='<div style="text-align:center;padding:40px;color:var(--txt3)">📭 Нет открытых позиций</div>';
+    }
+  }
+
+  // Signals
+  const sigEl=$('trd-signals');
+  if(sigEl){
+    const sigArr=Array.isArray(sig&&sig.signals)?sig.signals:(Array.isArray(sig)?sig:[]);
+    if(sigArr.length){
+      const upd=$('trd-last-upd');
+      if(upd) upd.textContent='обн. '+new Date().toLocaleTimeString('ru-RU');
+      sigEl.innerHTML=sigArr.slice(0,8).map(s=>{
+        // Multi-strategy format: {symbol, consensus, strategies:[{action,actionable,strategy,strength,reason,indicators}]}
+        const stratsArr=(s.strategies&&Array.isArray(s.strategies))?s.strategies:[];
+        const actionable=stratsArr.filter(st=>st.actionable);
+        const hasBuy=actionable.some(st=>String(st.action).match(/BUY|LONG/i));
+        const hasSell=actionable.some(st=>String(st.action).match(/SELL|SHORT/i));
+        const idc=(stratsArr[0]&&stratsArr[0].indicators)||{};
+        const borderCol=actionable.length>0?(hasBuy?'rgba(0,232,122,.35)':hasSell?'rgba(255,45,85,.35)':'rgba(255,200,0,.3)'):'rgba(255,255,255,.08)';
+        const bgCol=actionable.length>0?(hasBuy?'rgba(0,232,122,.05)':hasSell?'rgba(255,45,85,.05)':'rgba(255,200,0,.03)'):'var(--bg3)';
+        return '<div style="padding:9px;background:'+bgCol+';border:1px solid '+borderCol+';border-radius:8px;margin-bottom:6px">'
+          +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
+          +'<span style="font-weight:700;font-size:13px">'+esc(s.symbol||'')+'</span>'
+          +'<div style="display:flex;gap:4px;flex-wrap:wrap">'
+          +(actionable.length
+            ?actionable.map(st=>'<span style="font-size:10px;padding:2px 7px;border-radius:5px;font-weight:700;background:'+(String(st.action).match(/BUY|LONG/i)?'rgba(0,232,122,.15)':'rgba(255,45,85,.15)')+';color:'+(String(st.action).match(/BUY|LONG/i)?'var(--grn)':'var(--red)')+'">'+esc(st.action)+' '+esc(st.strategy)+'</span>').join('')
+            :'<span style="font-size:10px;color:var(--txt3)">HOLD ×'+stratsArr.length+'</span>')
+          +'</div></div>'
+          +'<div style="display:flex;gap:10px;font-size:10px;color:var(--txt3)">'
+          +(idc.rsi!=null?'<span>RSI '+(+idc.rsi).toFixed(1)+'</span>':'')
+          +(idc.close!=null?'<span>$'+(+idc.close).toFixed(2)+'</span>':'')
+          +(actionable.length?'<span style="color:var(--yel)">⚡ '+actionable.length+'</span>':'')
+          +'</div>'
+          +'</div>';
+      }).join('');
+    } else {
+      sigEl.innerHTML='<div style="text-align:center;padding:30px;color:var(--txt3)">💤 Сигналов нет</div>';
+    }
+  }
+
+  // Strategies
+  const strtEl=$('trd-strategies');
+  if(strtEl){
+    if(stratList.length){
+      strtEl.innerHTML=stratList.map(s=>{
+        const on=s.enabled!==false;
+        const nm=esc(s.name||s.strategy_name||'?');
+        return '<div style="display:flex;justify-content:space-between;align-items:center;padding:9px;'
+          +'background:var(--bg3);border:1px solid var(--brd2);border-radius:8px;margin-bottom:6px">'
+          +'<div><div style="font-weight:600;font-size:12px">'+nm+'</div>'
+          +(s.description?'<div style="font-size:10px;color:var(--txt3)">'+esc(String(s.description).slice(0,50))+'</div>':'')+'</div>'
+          +'<button onclick="toggleStrategy('+JSON.stringify(s.name||s.strategy_name||'')+','+(!on)+')" '
+          +'style="padding:5px 14px;border-radius:7px;font-size:11px;font-weight:700;cursor:pointer;border:1px solid;'
+          +(on?'background:rgba(0,232,122,.12);border-color:rgba(0,232,122,.45);color:var(--grn)'
+              :'background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.15);color:var(--txt3)')
+          +'">'+(on?'✅ ВКЛ':'⏸ ВЫКЛ')+'</button>'
+          +'</div>';
+      }).join('');
+    } else {
+      strtEl.innerHTML='<div style="text-align:center;padding:20px;color:var(--txt3)">⚙️ Нет стратегий</div>';
+    }
+  }
+
+  // PnL history
+  const pnlEl=$('trd-pnl-history');
+  if(pnlEl){
+    const history=(pnl&&(pnl.pnl_history||pnl.history||pnl.daily_history))||[];
+    if(history.length){
+      pnlEl.innerHTML=history.slice(-14).reverse().map(h=>{
+        const v=+(h.pnl||h.daily_pnl||h.amount||0);
+        return '<div class="row" style="padding:5px 0;border-bottom:1px solid var(--brd)">'
+          +'<span style="color:var(--txt3);font-size:11px">'+esc(h.date||h.day||fmtDT(h.ts||h.created_at||''))+'</span>'
+          +'<span style="color:'+(v>=0?'var(--grn)':'var(--red)')+';font-weight:700">'+(v>=0?'+':'')+v.toFixed(4)+'$</span>'
+          +'</div>';
+      }).join('');
+    } else {
+      pnlEl.innerHTML='<div style="text-align:center;padding:20px;color:var(--txt3)">Нет истории PnL</div>';
+    }
+  }
+
+  // Balance detail
+  const balEl=$('trd-balance');
+  if(balEl) balEl.innerHTML=[
+    ['Всего USDT','$'+(+(b.balance_usdt||b.balance||b.total_balance||0)).toFixed(4)],
+    ['Доступно','$'+(+(b.available_balance||b.available||b.free||0)).toFixed(4)],
+    ['Маржа в позициях','$'+(+(b.used_margin||b.position_margin||b.locked||0)).toFixed(4)],
+    ['Нереализ. PnL',(+(b.unrealised_pnl||0)>=0?'+':'')+( +(b.unrealised_pnl||0)).toFixed(4)+'$'],
+  ].map(([l,v])=>'<div class="row"><span class="row-left">'+esc(l)+'</span><span style="color:var(--acc);font-weight:600">'+esc(v)+'</span></div>').join('');
+
+  // Trade history table
+  const histEl=$('trd-history');
+  if(histEl){
+    const trades=(hist&&(hist.trades||hist.history||hist))||[];
+    const arr=Array.isArray(trades)?trades:[];
+    if(arr.length){
+      histEl.innerHTML='<table style="width:100%;font-size:10px;border-collapse:collapse">'
+        +'<thead><tr style="color:var(--txt3);border-bottom:1px solid var(--brd2)">'
+        +'<th style="text-align:left;padding:4px">Символ</th><th>Сторона</th><th style="text-align:right">Цена</th><th style="text-align:right">Кол-во</th><th style="text-align:right">PnL</th></tr></thead>'
+        +'<tbody>'+arr.slice(0,15).map(t=>{
+          const isBuy=String(t.side||t.direction||'').toLowerCase().includes('buy');
+          const tPnl=+(t.pnl||t.closedPnl||t.realised_pnl||0);
+          return '<tr style="border-bottom:1px solid var(--brd)">'
+            +'<td style="padding:4px;color:var(--txt)">'+esc(t.symbol||t.pair||'')+'</td>'
+            +'<td style="text-align:center;color:'+(isBuy?'var(--grn)':'var(--red)')+'">'+(isBuy?'▲':'▼')+'</td>'
+            +'<td style="text-align:right;color:var(--txt)">'+(+(t.price||t.avg_price||0)).toFixed(2)+'</td>'
+            +'<td style="text-align:right;color:var(--txt3)">'+esc(String(t.qty||t.size||0))+'</td>'
+            +'<td style="text-align:right;color:'+(tPnl>=0?'var(--grn)':'var(--red)')+';font-weight:600">'+(tPnl>=0?'+':'')+tPnl.toFixed(3)+'</td>'
+            +'</tr>';
+        }).join('')+'</tbody></table>';
+    } else {
+      histEl.innerHTML='<div style="text-align:center;padding:20px;color:var(--txt3)">Нет истории сделок</div>';
+    }
+  }
+
+  // Controls
+  const ctrlEl=$('trd-controls');
+  if(ctrlEl) ctrlEl.innerHTML='<div style="display:flex;gap:10px;flex-wrap:wrap">'
+    +'<button class="btn btn-g" onclick="tradingAction(\'resume\')">▶ Торговля ВКЛ</button>'
+    +'<button class="btn btn-y" onclick="tradingAction(\'pause\')">⏸ Пауза</button>'
+    +'<button class="btn btn-r" onclick="tradingAction(\'close_all\')">📤 Закрыть все</button>'
+    +'<button class="btn" onclick="loadTrading()">↻ Обновить</button>'
+    +'</div>';
+}
+
+async function toggleStrategy(name, enable) {
+  const r=await api('/api/bybit/strategy/'+encodeURIComponent(name)+'/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enable})});
+  showToast(r?((enable?'Включена':'Выключена')+': '+name):'Ошибка',r?'g':'r','⚙️');
+  if(r) loadTrading();
+}
+
+async function tradingAction(action) {
+  if(action==='close_all'&&!confirm('Закрыть все позиции?')) return;
+  const r=await api('/api/trading/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})});
+  showToast(r?'Выполнено: '+action:'Ошибка',r?'g':'r','⚡');
+  if(r) setTimeout(loadTrading,1500);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  EMAIL — loadEmail
+// ═══════════════════════════════════════════════════════════════
+async function loadEmail() {
+  const [status,inbox,keys]=await Promise.all([
+    api('/api/email/status'),
+    api('/api/email/inbox'),
+    api('/api/email/keys'),
+  ]);
+
+  const s=status||{};
+  const emKpis=$('em-kpis');
+  if(emKpis) emKpis.innerHTML=[
+    statCard(s.inbox_count||s.total||s.total_emails||0,'Всего писем','','stat-acc'),
+    statCard(s.unread||s.unseen||0,'Непрочитанных','',(s.unread||s.unseen||0)>0?'stat-y':''),
+    statCard(s.keys_found||0,'Ключей найдено','',(s.keys_found||0)>0?'stat-grn':''),
+    statCard((s.connected||s.status==='ok')?'✅ OK':'❌ Откл.','IMAP',s.email||'',(s.connected||s.status==='ok')?'stat-grn':'stat-red'),
+  ].join('');
+
+  const inboxEl=$('em-inbox');
+  if(inboxEl){
+    const emails=(inbox&&(inbox.emails||inbox.messages||inbox))||[];
+    const arr=Array.isArray(emails)?emails:[];
+    if(arr.length){
+      inboxEl.innerHTML=arr.slice(0,25).map(e=>{
+        const subj=esc((e.subject||e.Subject||'Без темы').slice(0,70));
+        const from=esc((e.from||e.From||e.sender||'').slice(0,50));
+        const dt=fmtDT(e.date||e.Date||e.received_at||e.ts||'');
+        const isNew=e.flags&&e.flags.includes&&e.flags.includes('\\Seen')?false:true;
+        return '<div style="padding:10px 2px;border-bottom:1px solid var(--brd2);'+(isNew?'background:rgba(0,212,255,.02)':'')+'">'
+          +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">'
+          +'<span style="font-weight:'+(isNew?'700':'600')+';font-size:12px;color:'+(isNew?'var(--txt)':'var(--txt2)')+'">'+subj+'</span>'
+          +'<span style="font-size:10px;color:var(--txt3);white-space:nowrap;flex-shrink:0">'+dt+'</span>'
+          +'</div>'
+          +'<div style="font-size:11px;color:var(--txt3);margin-top:3px">'+from+'</div>'
+          +'</div>';
+      }).join('');
+    } else {
+      inboxEl.innerHTML='<div style="text-align:center;padding:30px;color:var(--txt3)">📭 Нет писем или IMAP не подключён</div>';
+    }
+  }
+
+  const keysEl=$('em-keys');
+  if(keysEl){
+    const klist=(keys&&(keys.keys||keys.api_keys||keys))||[];
+    const karr=Array.isArray(klist)?klist:Object.entries(typeof klist==='object'?klist:{}).map(([k,v])=>({service:k,value:v}));
+    if(karr.length){
+      keysEl.innerHTML=karr.slice(0,15).map(k=>{
+        const val=String(k.value||k.key||k.token||'');
+        const masked=val.length>12?val.slice(0,8)+'...'+val.slice(-4):val;
+        return '<div style="padding:8px 10px;background:rgba(0,212,255,.04);border:1px solid rgba(0,212,255,.15);border-radius:8px;margin-bottom:6px">'
+          +'<div style="font-size:10px;color:var(--txt3);margin-bottom:3px">'+esc(k.service||k.platform||k.source||'')+'</div>'
+          +'<code style="font-size:11px;color:var(--acc)">'+esc(masked)+'</code>'
+          +'</div>';
+      }).join('');
+    } else {
+      keysEl.innerHTML='<div style="text-align:center;padding:20px;color:var(--txt3)">🔑 Ключей не найдено</div>';
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  НАСТРОЙКИ — loadSettings
+// ═══════════════════════════════════════════════════════════════
+async function loadSettings() {
+  const [st,llmSt,metrics,cfg]=await Promise.all([
+    api('/api/status'),
+    api('/api/llm/status'),
+    api('/api/metrics/summary'),
+    api('/api/config'),
+  ]);
+
+  const m=metrics||{};
+  const setKpis=$('set-kpis');
+  if(setKpis&&st) setKpis.innerHTML=[
+    statCard(st.agents_count||47,'Агентов','','stat-acc'),
+    statCard('$'+(+(st.daily_cost_usd||0)).toFixed(4),'Расходы/день','лимит $'+(st.cost_limit_usd||0)),
+    statCard(st.guardrail_level||0,'Guardrail уровень',''),
+    statCard(st.autonomy_enabled?'ВКЛ':'ВЫКЛ','Автономия','',st.autonomy_enabled?'stat-grn':'stat-y'),
+  ].join('');
+
+  const provEl=$('set-providers');
+  if(provEl){
+    const provData=llmSt||{};
+    const providers=provData.providers||provData;
+    if(providers&&typeof providers==='object'){
+      const provNames={groq:'Groq',openrouter:'OpenRouter',deepseek:'DeepSeek',huggingface:'HuggingFace',hf:'HuggingFace',openai:'OpenAI',anthropic:'Anthropic',together:'Together AI',cohere:'Cohere'};
+      const entries=Array.isArray(providers)?providers.map(p=>[p.name||p.provider,p]):Object.entries(providers);
+      provEl.innerHTML=(entries.length?entries:[]).map(([name,v])=>{
+        const ok=!!(v&&(v.available===true||v.status==='ok'||v.ok===true));
+        const configured=!!(v&&(v.key_configured||v.configured));
+        const pname=provNames[name]||name;
+        const model=String((v&&(v.model||v.current_model||v.models&&v.models[0]))||'').slice(0,30);
+        return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px;background:var(--bg3);border:1px solid '+(ok?'rgba(0,232,122,.2)':'rgba(255,255,255,.07)')+';border-radius:8px;margin-bottom:6px">'
+          +'<div style="display:flex;align-items:center;gap:8px">'
+          +'<span class="dot dot-'+(ok?'g':'r')+'"></span>'
+          +'<div><div style="font-weight:700;font-size:12px">'+esc(pname)+'</div>'
+          +(model?'<div style="font-size:10px;color:var(--txt3)">'+esc(model)+'</div>':'')+'</div></div>'
+          +bdg(ok?'✅ OK':'❌ Откл.',ok?'g':'r')
+          +'</div>';
+      }).join('')||'<div style="color:var(--txt3);text-align:center;padding:16px">Нет данных</div>';
+    } else {
+      provEl.innerHTML='<div style="color:var(--txt3);text-align:center;padding:16px">Нет данных о провайдерах</div>';
+    }
+  }
+
+  const parEl=$('set-params');
+  if(parEl&&st) parEl.innerHTML=[
+    ['Сервис',bdg(st.service||'?',st.service==='ok'?'g':'r')],
+    ['Brain',bdg(st.brain||'?',st.brain==='ok'?'g':'b')],
+    ['Автономия',bdg(st.autonomy_enabled?'Включена':'Выкл.',st.autonomy_enabled?'g':'y')],
+    ['Groq-only',bdg(st.groq_only_mode?'ВКЛ':'ВЫКЛ',st.groq_only_mode?'y':'g')],
+    ['Guardrail',bdg(String(st.guardrail_level||0),'b')],
+    ['Watchdog',bdg(st.watchdog||'?',st.watchdog==='ok'?'g':'b')],
+  ].map(([l,v])=>'<div class="row"><span class="row-left">'+esc(l)+'</span>'+v+'</div>').join('');
+
+  const keysEl=$('set-keys');
+  if(keysEl){
+    const cfgKeys=(cfg&&(cfg.config||cfg.api_keys||cfg.keys||cfg))||{};
+    const knownKeys=['GROQ_API_KEY','OPENROUTER_API_KEY','DEEPSEEK_API_KEY','HUGGINGFACE_TOKEN','GITHUB_TOKEN','GMAIL_APP_PASSWORD','TELEGRAM_BOT_TOKEN'];
+    const entries=typeof cfgKeys==='object'&&!Array.isArray(cfgKeys)?Object.entries(cfgKeys):[];
+    const filtered=entries.filter(([k])=>knownKeys.some(kk=>k.includes(kk.split('_')[0]))||k.includes('KEY')||k.includes('TOKEN'));
+    if(filtered.length){
+      keysEl.innerHTML=filtered.slice(0,12).map(([k,v])=>{
+        const val=String(v||'');
+        const isSet=val&&val!=='null'&&val!=='undefined'&&val.length>3;
+        return '<div class="row"><span class="row-left" style="font-size:11px;font-family:monospace;max-width:160px;overflow:hidden;text-overflow:ellipsis">'+esc(k)+'</span>'
+          +'<span style="color:'+(isSet?'var(--grn)':'var(--red)')+';font-size:11px">'+(isSet?'✅ ✓':'❌ нет')+'</span></div>';
+      }).join('');
+    } else {
+      keysEl.innerHTML='<div style="text-align:center;padding:20px;color:var(--txt3)">Нет данных о ключах</div>';
+    }
+  }
+
+  const metEl=$('set-metrics');
+  if(metEl) metEl.innerHTML=[
+    ['Баланс Bybit','$'+(+(m.balance_usdt||0)).toFixed(2)],
+    ['Сервисов',(m.services_up||0)+'/'+(m.services_total||0)],
+    ['Чат запросов',String(m.chat_requests_total||0)],
+    ['Ошибок',String(m.errors_total||0)],
+  ].map(([l,v])=>'<div class="row"><span class="row-left">'+esc(l)+'</span><span style="color:var(--acc);font-weight:600">'+esc(v)+'</span></div>').join('');
+}
+
+async function testLLM() {
+  const msg=($('set-test-msg')&&$('set-test-msg').value)||'Привет!';
+  const res=$('set-test-res');
+  if(res) res.textContent='⏳ Отправляю...';
+  const r=await api('/api/llm/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,max_tokens:100})});
+  if(res) res.textContent=r?(r.response||r.content||r.text||r.answer||JSON.stringify(r).slice(0,300)):'❌ Ошибка';
+}
+
+async function systemAction(action) {
+  const fb=$('set-action-fb');
+  if(fb) fb.textContent='⏳...';
+  const url='/api/system/'+action.replace(/_/g,'/');
+  const r=await api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  const ok=r&&(r.ok||r.status==='ok'||r.success);
+  if(fb) fb.innerHTML='<span style="color:'+(ok?'var(--grn)':'var(--txt)')+'">'+(ok?'✅ Выполнено: '+action:'⚠ '+JSON.stringify(r||{}).slice(0,80))+'</span>';
+  showToast(ok?'Выполнено: '+action:'Ответ получен',ok?'g':'y',ok?'✅':'⚙️');
+}
+
+
+// ═══════════════════ WAVE-2 FUNCTIONS ═══════════════════
+
+// ──── АРБИТРАЖ ────────────────────────────────────────────────────
+async function loadArb(){
+  const upd=$('arb-upd');
+  if(upd) upd.textContent='обн. '+new Date().toLocaleTimeString('ru-RU');
+  try{
+    const arb=await api('/api/arbitrage/live');
+    // normalize: could be {opportunities:[...]}, {data:[...]}, or array
+    const opps=arb&&(Array.isArray(arb.opportunities)?arb.opportunities:
+                    Array.isArray(arb.data)?arb.data:
+                    Array.isArray(arb.items)?arb.items:
+                    Array.isArray(arb)?arb:[]);
+
+    // KPI row
+    const kpis=$('arb-kpis');
+    if(kpis){
+      const profits=opps.map(o=>+(o.profit_est||o.profit_pct||o.profit||0));
+      const bestP=profits.length?Math.max(...profits):0;
+      const bestDisp=bestP>100?(bestP/100).toFixed(2):bestP.toFixed(2);
+      const active=opps.filter(o=>o.tradeable!==false&&o.profitable!==false).length;
+      const fr=arb&&(arb.funding_rate||arb.avg_funding);
+      kpis.innerHTML=[
+        statCard(opps.length,'Возможностей',null,'acc'),
+        statCard(bestP>0?bestDisp+'%':'—','Лучшая прибыль',null,'grn'),
+        statCard(active||opps.length,'Активных',null,null),
+        statCard(fr!=null?(+fr*100).toFixed(4)+'%':'—','Funding Rate',null,null)
+      ].join('');
+    }
+
+    // Table
+    const el=$('arb-list');
+    if(!el) return;
+    if(!opps.length){
+      el.innerHTML='<div style="text-align:center;padding:30px;color:var(--txt3)">💤 Нет арбитражных возможностей</div>';
+      return;
+    }
+    // Sort by profit descending
+    const sorted=[...opps].sort((a,b)=>(+(b.profit_est||b.profit_pct||b.profit||0))-(+(a.profit_est||a.profit_pct||a.profit||0)));
+    el.innerHTML='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">'
+      +'<thead><tr style="color:var(--txt3);border-bottom:1px solid var(--brd2)">'
+      +'<th style="text-align:left;padding:7px 6px">Символ</th>'
+      +'<th style="text-align:center;padding:7px 6px">Тип</th>'
+      +'<th style="text-align:right;padding:7px 6px">Прибыль</th>'
+      +'<th style="text-align:right;padding:7px 6px">Спред</th>'
+      +'<th style="text-align:right;padding:7px 6px">Объём</th>'
+      +'<th style="text-align:center;padding:7px 6px">Статус</th>'
+      +'</tr></thead><tbody>'
+      +sorted.slice(0,25).map(o=>{
+        const p=+(o.profit_est||o.profit_pct||o.profit||0);
+        const pDisp=p>100?(p/100).toFixed(2):p.toFixed(2);
+        const col=p>5?'var(--grn)':p>0?'var(--yel)':p<0?'var(--red)':'var(--txt3)';
+        const spread=o.spread_pct!=null?Math.abs(+o.spread_pct).toFixed(4)+'%':o.spread!=null?(+o.spread).toFixed(5):'—';
+        const vol=+(o.volume||o.size||o.qty||0);
+        const active=o.tradeable!==false&&o.profitable!==false&&o.active!==false;
+        return '<tr style="border-bottom:1px solid rgba(255,255,255,.03)">'
+          +'<td style="padding:6px;font-weight:700">'+esc(o.symbol||o.pair||o.coin||'')+'</td>'
+          +'<td style="padding:6px;text-align:center"><span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(0,212,255,.1);color:var(--acc)">'+esc(o.type||o.arb_type||'spot-perp')+'</span></td>'
+          +'<td style="padding:6px;text-align:right;font-weight:700;color:'+col+'">'+pDisp+'%</td>'
+          +'<td style="padding:6px;text-align:right;color:var(--txt3)">'+spread+'</td>'
+          +'<td style="padding:6px;text-align:right;color:var(--txt3)">'+( vol>0?('$'+vol.toLocaleString()):'—')+'</td>'
+          +'<td style="padding:6px;text-align:center"><span style="font-size:9px;padding:1px 5px;border-radius:3px;background:'+(active?'rgba(0,232,122,.12)':'rgba(255,45,85,.12)')+';color:'+(active?'var(--grn)':'var(--red)')+'">'+( active?'ON':'OFF')+'</span></td>'
+          +'</tr>';
+      }).join('')
+      +'</tbody></table></div>';
+  }catch(e){
+    const el=$('arb-list');
+    if(el) el.innerHTML='<div style="text-align:center;padding:20px;color:var(--red)">⚠ '+esc(e.message)+'</div>';
+  }
+}
+
+// ──── ДЕНЬГИ ──────────────────────────────────────────────────────
+async function loadMoney(){
+  const upd=$('money-upd');
+  if(upd) upd.textContent='обн. '+new Date().toLocaleTimeString('ru-RU');
+  try{
+    const [prices, sigsRaw, port]=await Promise.all([
+      api('/api/money/prices').catch(()=>null),
+      api('/api/money/signals').catch(()=>null),
+      api('/api/money/portfolio').catch(()=>null)
+    ]);
+
+    // Normalize price map: {BTCUSDT:73171} or [{symbol,price},...] or {prices:[...]}
+    const pm={};
+    // API: {prices:{BTC:73260,...},ts} or [{symbol,price},...] or {BTC:73260,...}
+    const _priceData=prices&&(prices.prices&&typeof prices.prices==='object'&&!Array.isArray(prices.prices)?prices.prices:prices);
+    if(_priceData&&typeof _priceData==='object'){
+      if(Array.isArray(_priceData)) _priceData.forEach(p=>{ if(p.symbol) pm[p.symbol.replace('USDT','').toUpperCase()]=+(p.price||p.last||0); });
+      else Object.entries(_priceData).forEach(([k,v])=>{ if(typeof v==='number') pm[k.replace('USDT','').toUpperCase()]=v; });
+    }
+
+    const fmtP=v=>v>=1000?'$'+(v/1000).toFixed(1)+'K':'$'+v.toFixed(2);
+    const btc=pm['BTC']||pm['BTCUSDT']||0;
+    const eth=pm['ETH']||pm['ETHUSDT']||0;
+    const sol=pm['SOL']||pm['SOLUSDT']||0;
+
+    // Balance from portfolio text
+    let bal='—';
+    if(port&&port.summary){ const m=port.summary.match(/(\d+\.\d+)\s*USDT/); if(m) bal='$'+m[1]; }
+    else if(port&&port.balance) bal='$'+(+port.balance).toFixed(2);
+
+    // KPIs
+    const kpis=$('money-kpis');
+    if(kpis) kpis.innerHTML=[
+      statCard(btc?fmtP(btc):'—','BTC',null,'grn'),
+      statCard(eth?fmtP(eth):'—','ETH',null,'acc'),
+      statCard(sol?fmtP(sol):'—','SOL',null,null),
+      statCard(bal,'Баланс USDT',null,null)
+    ].join('');
+
+    // Prices table
+    const prEl=$('money-prices');
+    if(prEl){
+      const entries=Object.entries(pm).filter(([k,v])=>v>0&&!k.includes('_'));
+      if(entries.length){
+        prEl.innerHTML='<table style="width:100%;border-collapse:collapse;font-size:12px">'
+          +'<thead><tr style="color:var(--txt3);border-bottom:1px solid var(--brd2)">'
+          +'<th style="text-align:left;padding:6px">Актив</th>'
+          +'<th style="text-align:right;padding:6px">Цена</th>'
+          +'</tr></thead><tbody>'
+          +entries.slice(0,15).map(([sym,p])=>'<tr style="border-bottom:1px solid rgba(255,255,255,.03)">'
+            +'<td style="padding:5px 6px;font-weight:700">'+esc(sym)+'/USDT</td>'
+            +'<td style="padding:5px 6px;text-align:right;color:var(--grn)">$'+(+p).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4})+'</td>'
+            +'</tr>').join('')
+          +'</tbody></table>';
+      } else {
+        prEl.innerHTML='<div style="text-align:center;padding:24px;color:var(--txt3)">Нет данных</div>';
+      }
+    }
+
+    // Signals table
+    const sigEl=$('money-signals');
+    if(sigEl){
+      const sigs=sigsRaw&&(Array.isArray(sigsRaw.signals)?sigsRaw.signals:Array.isArray(sigsRaw)?sigsRaw:[]);
+      if(sigs.length){
+        sigEl.innerHTML=sigs.slice(0,12).map(s=>{
+          const sig=(s.signal||s.direction||s.trend||'—').toUpperCase();
+          const isBull=/BUY|LONG|BULL|UP/.test(sig);
+          const isBear=/SELL|SHORT|BEAR|DOWN/.test(sig);
+          const col=isBull?'var(--grn)':isBear?'var(--red)':'var(--txt3)';
+          return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.03)">'
+            +'<div style="font-weight:700;font-size:12px">'+esc(s.symbol||'')+'</div>'
+            +'<div style="display:flex;gap:8px;align-items:center;font-size:11px">'
+            +(s.rsi!=null?'<span style="color:var(--txt3)">RSI '+(+s.rsi).toFixed(1)+'</span>':'')
+            +(s.price!=null?'<span style="color:var(--txt2)">$'+(+s.price).toFixed(2)+'</span>':'')
+            +(s.ma20!=null?'<span style="color:var(--txt3)">MA '+(+s.ma20).toFixed(1)+'</span>':'')
+            +'<span style="font-size:10px;padding:1px 7px;border-radius:4px;font-weight:700;background:'+(isBull?'rgba(0,232,122,.12)':isBear?'rgba(255,45,85,.12)':'rgba(255,255,255,.06)')+';color:'+col+'">'+esc(sig)+'</span>'
+            +'</div></div>';
+        }).join('');
+      } else {
+        sigEl.innerHTML='<div style="text-align:center;padding:30px;color:var(--txt3)">💤 Нет сигналов</div>';
+      }
+    }
+  }catch(e){
+    if($('money-prices')) $('money-prices').innerHTML='<div style="padding:14px;color:var(--red)">⚠ '+esc(e.message)+'</div>';
+  }
+}
+
+// ──── ФИНАНСЫ ──────────────────────────────────────────────────────
+async function loadEarnings(){
+  try{
+    const [ledger, summ]=await Promise.all([
+      api('/api/earnings/ledger').catch(()=>null),
+      api('/api/v5/earnings').catch(()=>api('/api/earnings/summary').catch(()=>null))
+    ]);
+
+    const tot=ledger&&ledger.totals||{};
+    const real=+(tot.real_earned||tot.earned||0);
+    const pnl=+(tot.paper_pnl||tot.pnl||0);
+    const defai=+(tot.defai_earned||0);
+
+    // Sources from ledger or summary
+    const sources=ledger&&ledger.sources||summ&&(summ.sources||summ.streams)||{};
+    const srcArr=Object.entries(sources);
+    const apys=srcArr.map(([,v])=>+(v&&(v.apy_pct||v.apy||v.rate)||0)).filter(a=>a>0);
+    const avgApy=apys.length?(apys.reduce((a,b)=>a+b,0)/apys.length).toFixed(1)+'%':'—';
+
+    // KPIs
+    const kpis=$('earn-kpis');
+    if(kpis) kpis.innerHTML=[
+      statCard('$'+real.toFixed(2),'Заработано',null,'grn'),
+      statCard((pnl>=0?'+':'')+'$'+pnl.toFixed(2),'Paper PnL',null,pnl>=0?'grn':'red'),
+      statCard(srcArr.length||'—','Источников',null,'acc'),
+      statCard(avgApy,'Avg APY',null,'yel')
+    ].join('');
+
+    // Sources cards
+    const srcEl=$('earn-sources');
+    if(srcEl){
+      if(srcArr.length){
+        srcEl.innerHTML=srcArr.map(([name,v])=>{
+          const apy=+(v&&(v.apy_pct||v.apy||v.rate)||0);
+          const type=v&&(v.type||v.source_type||'');
+          const rev=+(v&&(v.revenue||v.amount||v.earned||v.balance||0));
+          const active=v&&v.active!==false;
+          return '<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.04)">'
+            +'<div>'
+            +'<div style="font-weight:700;font-size:12px">'+esc(name)+'</div>'
+            +(type?'<div style="font-size:10px;color:var(--txt3)">'+esc(type)+'</div>':'')
+            +'</div>'
+            +'<div style="text-align:right;display:flex;flex-direction:column;gap:2px">'
+            +(apy>0?'<span style="color:var(--grn);font-size:12px;font-weight:700">'+apy.toFixed(1)+'% APY</span>':'')
+            +(rev>0?'<span style="font-size:11px;color:var(--txt2)">$'+rev.toFixed(2)+'</span>':'')
+            +(apy===0&&rev===0?'<span style="font-size:10px;color:var(--txt3)">—</span>':'')
+            +'</div></div>';
+        }).join('');
+      } else {
+        srcEl.innerHTML='<div style="text-align:center;padding:24px;color:var(--txt3)">Нет данных</div>';
+      }
+    }
+
+    // Ledger entries
+    const ledEl=$('earn-ledger');
+    if(ledEl){
+      const entries=ledger&&Array.isArray(ledger.entries)?ledger.entries:[];
+      if(entries.length){
+        ledEl.innerHTML='<table style="width:100%;border-collapse:collapse;font-size:11px">'
+          +'<thead><tr style="color:var(--txt3);border-bottom:1px solid var(--brd2)">'
+          +'<th style="text-align:left;padding:5px 4px">Дата</th>'
+          +'<th style="text-align:left;padding:5px 4px">Источник</th>'
+          +'<th style="text-align:right;padding:5px 4px">Сумма</th>'
+          +'</tr></thead><tbody>'
+          +entries.slice(0,20).map(e=>{
+            const amt=+(e.amount||e.value||0);
+            return '<tr style="border-bottom:1px solid rgba(255,255,255,.03)">'
+              +'<td style="padding:4px;color:var(--txt3)">'+esc(String(e.date||e.created||e.ts||'').slice(0,10))+'</td>'
+              +'<td style="padding:4px">'+esc(e.source||e.type||e.category||'')+'</td>'
+              +'<td style="padding:4px;text-align:right;color:'+(amt>=0?'var(--grn)':'var(--red)')+'">'+( amt>=0?'+':'')+'$'+Math.abs(amt).toFixed(2)+'</td>'
+              +'</tr>';
+          }).join('')
+          +'</tbody></table>';
+      } else {
+        ledEl.innerHTML='<div style="text-align:center;padding:24px;color:var(--txt3)">Операций нет</div>';
+      }
+    }
+  }catch(e){
+    if($('earn-sources')) $('earn-sources').innerHTML='<div style="padding:12px;color:var(--red)">⚠ '+esc(e.message)+'</div>';
+  }
+}
+
+// ──── ПРОДАЖИ ──────────────────────────────────────────────────────
+async function loadSales(){
+  try{
+    const [sales, biz]=await Promise.all([
+      api('/api/sales/status').catch(()=>null),
+      api('/api/business/projects').catch(()=>null)
+    ]);
+
+    // Parse sales data
+    const leads=+(sales&&(sales.total_leads||sales.leads||sales.leads_count||0));
+    const rev=+(sales&&(sales.revenue||sales.total_revenue||sales.revenue_usd||0));
+    const pipeline=+(sales&&(sales.pipeline||sales.pipeline_value||sales.pipeline_usd||0));
+    const conv=+(sales&&(sales.conversion||sales.conversion_rate||sales.conv_pct||0));
+
+    // KPIs
+    const kpis=$('sales-kpis');
+    if(kpis) kpis.innerHTML=[
+      statCard(leads||'0','Лидов',null,'acc'),
+      statCard('$'+(rev||0).toLocaleString(),'Выручка',null,'grn'),
+      statCard(pipeline?'$'+pipeline.toLocaleString():'—','Pipeline',null,null),
+      statCard(conv?conv.toFixed(1)+'%':'—','Конверсия',null,null)
+    ].join('');
+
+    // Sales funnel
+    const funEl=$('sales-funnel');
+    if(funEl){
+      const stages=sales&&(sales.by_stage||sales.stages||sales.funnel||sales.pipeline_stages);
+      if(stages&&(Array.isArray(stages)?stages.length:Object.keys(stages).length>0)){
+        const arr=Array.isArray(stages)?stages:Object.entries(stages).map(([k,v])=>({name:k,...(typeof v==='object'&&v?v:{count:v})}));
+        const maxCnt=Math.max(...arr.map(s=>+(s.count||s.leads||s.qty||1)),1);
+        funEl.innerHTML=arr.map(st=>{
+          const cnt=+(st.count||st.leads||st.qty||0);
+          const val=+(st.value||st.revenue||st.amount||0);
+          const pct=Math.round(cnt/maxCnt*100);
+          return '<div style="margin-bottom:12px">'
+            +'<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">'
+            +'<span style="font-weight:700">'+esc(st.name||st.stage||'')+'</span>'
+            +'<span style="color:var(--txt3)">'+cnt+(val?' · $'+val.toLocaleString():'')+'</span>'
+            +'</div>'
+            +'<div style="background:var(--brd);border-radius:4px;height:6px">'
+            +'<div style="background:var(--acc);border-radius:4px;height:6px;width:'+pct+'%;transition:width .4s"></div>'
+            +'</div></div>';
+        }).join('');
+      } else if(sales){
+        // Flat: show all numeric fields
+        const flat=Object.entries(sales).filter(([,v])=>typeof v==='number'||typeof v==='string');
+        funEl.innerHTML='<div>'+flat.map(([k,v])=>'<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:12px">'
+          +'<span style="color:var(--txt3)">'+esc(k)+'</span>'
+          +'<span style="font-weight:700">'+esc(String(v))+'</span>'
+          +'</div>').join('')+'</div>';
+      } else {
+        funEl.innerHTML='<div style="text-align:center;padding:24px;color:var(--txt3)">Нет данных</div>';
+      }
+    }
+
+    // Business projects
+    const projEl=$('sales-projects');
+    if(projEl){
+      const projects=biz&&(biz.projects||biz);
+      if(projects&&typeof projects==='object'&&!Array.isArray(projects)){
+        const projArr=Object.entries(projects).filter(([k,v])=>!k.startsWith('_')&&v&&typeof v==='object');
+        if(projArr.length){
+          projEl.innerHTML=projArr.map(([name,p])=>{
+            const active=p.active!==false&&p.enabled!==false;
+            const roi=+(p.roi||0);
+            const rev14=+(p.revenue_14d||p.revenue||0);
+            const runs=+(p.run_count||p.runs||0);
+            const errs=+(p.error_count||p.errors||0);
+            const quota=p.quota||'';
+            return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.04)">'
+              +'<div style="display:flex;align-items:center;gap:8px">'
+              +'<span style="font-size:9px;padding:2px 5px;border-radius:3px;font-weight:700;background:'+(active?'rgba(0,232,122,.12)':'rgba(255,45,85,.12)')+';color:'+(active?'var(--grn)':'var(--red)')+'">'+( active?'ON':'OFF')+'</span>'
+              +'<div>'
+              +'<div style="font-size:12px;font-weight:700">'+esc(name.replace(/_/g,' '))+'</div>'
+              +(quota?'<div style="font-size:9px;color:var(--txt3)">Квота: '+esc(quota)+(p.routing?' · '+esc(p.routing):'')+'</div>':'')
+              +'</div></div>'
+              +'<div style="text-align:right;font-size:11px">'
+              +(roi>0?'<span style="color:var(--grn)">ROI '+roi.toFixed(1)+'%</span><br>':'')
+              +(rev14>0?'<span style="color:var(--txt2)">$'+rev14.toFixed(0)+'</span><br>':'')
+              +'<span style="color:var(--txt3)">'+runs+'↺'+(errs?' <span style="color:var(--red)">'+errs+'⚠</span>':'')+'</span>'
+              +'</div></div>';
+          }).join('');
+        } else {
+          projEl.innerHTML='<div style="text-align:center;padding:24px;color:var(--txt3)">Нет проектов</div>';
+        }
+      } else {
+        projEl.innerHTML='<div style="text-align:center;padding:24px;color:var(--txt3)">Нет данных</div>';
+      }
+    }
+  }catch(e){
+    if($('sales-funnel')) $('sales-funnel').innerHTML='<div style="padding:12px;color:var(--red)">⚠ '+esc(e.message)+'</div>';
+  }
 }
 
 go('dash');
