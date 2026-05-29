@@ -962,6 +962,17 @@ body.loading #global-loader{opacity:1}
       <div id="llm-sys"></div>
     </div>
   </div>
+  <div class="sec-title" style="margin-top:16px"><span>📊 Статистика вызовов</span></div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">📈</span>Вызовы провайдеров</div>
+      <div id="llm-stats"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-title-ico">💰</span>Расход / Лимит</div>
+      <div id="llm-cost"></div>
+    </div>
+  </div>
 </div>
 
 <!-- ═══════════════════ ЧАТ ═══════════════════ -->
@@ -1154,6 +1165,7 @@ body.loading #global-loader{opacity:1}
 <div id="sc-trading" class="sc">
   <div class="g5" id="trd-kpis"></div>
   <div id="trd-circuit" style="margin-bottom:10px"></div>
+  <div id="trd-risk" style="margin-bottom:14px"></div>
   <div class="g2" style="margin-bottom:14px">
     <div class="card">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
@@ -1379,7 +1391,7 @@ function loadTab(t) {
     arb:loadArb, money:loadMoney, earnings:loadEarnings, sales:loadSales,
     quality:loadQuality, failures:loadFailures, evolution:loadEvolution,
     platforms:loadPlatforms, skills:loadSkills, scout:loadScout,
-    llm:loadLLM, chat:()=>{}, logs:loadLogs, browser:loadBrowser,
+    llm:loadLLM, chat:loadChat, logs:loadLogs, browser:loadBrowser,
     email:loadEmail, settings:loadSettings
   };
   if (m[t]) m[t]();
@@ -1534,6 +1546,38 @@ async function loadDash() {
       ${bar(hp, hp>=100?'grn':hp>=70?'yel':'red')}
       <div style="font-size:10px;color:var(--txt3);margin-top:3px">${hp}% подсистем в норме</div>
     `;
+  } else {
+    // HYP offline: populate dash-health from local APIs
+    Promise.all([
+      api('/api/services/health').catch(()=>null),
+      api('/api/analytics/summary').catch(()=>null)
+    ]).then(([sh,an]) => {
+      const svcList = sh ? Object.entries(sh).filter(([k])=>k!=='_ts') : [];
+      const svcOk = svcList.filter(([,v])=>v&&v.ok).length;
+      const errCnt = an ? (an.errors_today||0) : 0;
+      const uptH = an ? (an.uptime_hours||0) : 0;
+      if($('dash-health')) $('dash-health').innerHTML = svcList.map(([k,v]) =>
+        '<div class="row">'
+          +'<span class="row-left">'+dot(v&&v.ok)+'<span style="font-size:12px">'+esc((v&&v.label)||k)+'</span></span>'
+          +bdg(v&&v.ok?'ОК':'СТОП',v&&v.ok?'g':'r')
+          +'</div>'
+      ).join('') || '<div class="alert alert-b">Нет данных сервисов</div>';
+      if($('dash-hkpi')) $('dash-hkpi').innerHTML = [
+        ['Аптайм системы', uptH.toFixed(1)+' ч'],
+        ['Сервисов OK', svcOk+'/'+svcList.length],
+        ['Сообщений сегодня', an?an.messages_today||0:0],
+        ['LLM вызовов', an?an.llm_calls||0:0],
+        ['База знаний', (an?an.knowledge_entries||0:0)+' записей'],
+        ['Ошибок сегодня', errCnt],
+      ].map(([l,v])=>'<div class="row"><span class="row-left">'+esc(l)+'</span><span style="color:var(--acc);font-weight:700">'+esc(String(v))+'</span></div>').join('');
+      if($('dash-alerts')) $('dash-alerts').innerHTML = (errCnt>0
+        ? '<div class="alert alert-r">⚠ '+errCnt+' ошибок сегодня</div>'
+        : '<div class="alert alert-g">✅ Ошибок нет — система в норме</div>')
+        +'<div class="row"><span class="row-left">Аптайм</span>'+bdg(uptH.toFixed(1)+'ч',uptH>24?'g':'y')+'</div>'
+        +'<div class="row"><span class="row-left">Сервисов</span>'+bdg(svcOk+'/'+svcList.length,svcOk===svcList.length?'g':'y')+'</div>'
+        +bar(svcList.length?svcOk/svcList.length*100:0,'grn')
+        +'<div style="font-size:10px;color:var(--txt3);margin-top:3px">Hyperion offline — локальные метрики</div>';
+    });
   }
   // Load real service health indicators
   loadServices();
@@ -1781,15 +1825,22 @@ async function loadRevenue() {
     {n:'Фаза 2 — Глобальный английский рынок', target:5000},
     {n:'Фаза 3 — APAC (Азия-Пацифик)', target:20000},
   ];
-  $('rev-phases').innerHTML = phases.map(p => {
+  // Real earnings from v5 streams
+  const realToday = v5e ? (+(v5e.today_usd||0)) : 0;
+  const realTotal = v5e ? (+(v5e.total_usd||0)) : 0;
+  const projMonthly = realToday > 0 ? realToday * 30 : totalMonthly;
+  $('rev-phases').innerHTML = phases.map((p,pi) => {
     const t = p.target;
-    const pg = Math.min(totalMonthly / t * 100, 100);
+    const pg = Math.min(projMonthly / t * 100, 100);
     const cls = pg>=100?'grn':pg>=50?'yel':'acc';
-    return `<div class="phase-item">
-      <div class="phase-head"><span class="phase-name">${p.n}</span><span class="phase-target">$${fmtN(t)}/мес</span></div>
-      ${bar(pg,cls)}
-      <div class="phase-pct">${pg.toFixed(1)}% от цели — прогноз $${totalMonthly.toFixed(0)}/мес</div>
-    </div>`;
+    const realInfo = realToday>0 ? '<div style="font-size:10px;color:var(--grn);margin-top:2px">💰 Сегодня заработано: $'+realToday.toFixed(4)+(realTotal>0?' | Всего: $'+realTotal.toFixed(4):'')+'</div>' : '';
+    const srcNote = realToday>0 ? 'по реальным данным' : 'прогноз';
+    return '<div class="phase-item">'
+      +'<div class="phase-head"><span class="phase-name">'+p.n+'</span><span class="phase-target">$'+fmtN(t)+'/мес</span></div>'
+      +bar(pg,cls)
+      +'<div class="phase-pct">'+pg.toFixed(1)+'% от цели — '+srcNote+' $'+projMonthly.toFixed(0)+'/мес</div>'
+      +realInfo
+      +'</div>';
   }).join('');
 }
 
@@ -1866,7 +1917,11 @@ async function loadAgents() {
 // ═══════════════════════════════════════════════════════════════════════════
 async function loadTasks() {
   // Try local queue first, fallback to tasks API
-  const d = await api('/api/tasks/queue').catch(()=>null) || await api('/api/tasks').catch(()=>null);
+  const [_qd, _td] = await Promise.all([
+    api('/api/tasks/queue').catch(()=>null),
+    api('/api/tasks').catch(()=>null)
+  ]);
+  const d = _qd || _td;
   if (!d) return;
   const tasks = d.tasks||[], st = {pending: d.pending||0, running:0, completed:0, failed:0, ...(d.stats||{})};
   $('task-kpis').innerHTML = [
@@ -1993,6 +2048,43 @@ async function loadQuality() {
     $('slo-pipe').innerHTML = Object.entries(pipe).map(([k,v]) =>
       `<div class="row"><span class="row-left">${esc(k)}</span><span style="color:var(--acc)">${fmtN(v)}</span></div>`
     ).join('') || '<div style="color:var(--txt3);padding:10px;font-size:12px">Нет данных Pipeline</div>';
+  } else {
+    // SLO fallback: use local metrics when Hyperion is dead
+    Promise.all([
+      api('/api/v5/analytics').catch(()=>null),
+      api('/api/services/health').catch(()=>null),
+      api('/api/analytics/summary').catch(()=>null)
+    ]).then(([av5,sh,an]) => {
+      const provs = av5&&av5.llm&&av5.llm.providers ? Object.entries(av5.llm.providers) : [];
+      const avail = provs.filter(([,v])=>v&&v.available).length;
+      const svcList = sh ? Object.entries(sh) : [];
+      const svcOk = svcList.filter(([,v])=>v&&v.ok).length;
+      const uptH = an ? (an.uptime_hours||0) : 0;
+      if($('slo-kpis')) $('slo-kpis').innerHTML = [
+        statCard(svcOk+'/'+svcList.length,'Сервисов OK','онлайн',svcOk===svcList.length&&svcList.length>0?'stat-grn':'stat-yel'),
+        statCard(avail+'/'+provs.length,'LLM-провайдеров','доступно',avail>0?'stat-grn':null),
+        statCard(uptH.toFixed(1)+'ч','Аптайм','системы',uptH>24?'stat-grn':null),
+        statCard(an?an.messages_today||0:0,'Сообщений','сегодня','stat-acc'),
+      ].join('');
+      if($('slo-lat')) $('slo-lat').innerHTML = '<div class="alert alert-b" style="margin-bottom:12px">ℹ Hyperion SLO недоступен. Показаны метрики LLM-провайдеров.</div>'
+        + (provs.filter(([,v])=>v&&v.available).length
+          ? provs.filter(([,v])=>v&&v.available).slice(0,6).map(([name,v]) => {
+              const lat=v.latency||0;
+              const pct=lat>0?Math.min(100,lat/500*100):3;
+              const col=pct<50?'grn':pct<90?'yel':'red';
+              return '<div style="margin-bottom:10px"><div class="row"><span class="row-left"><b>'+esc(name)+'</b></span><span style="color:#ddeeff;font-weight:700">'+(lat>0?fmtMs(lat):'✅ в сети')+'</span></div>'+bar(pct,col)+'</div>';
+            }).join('')
+          : '<div style="color:var(--txt3);padding:10px;font-size:12px">Нет данных задержек</div>');
+      if($('slo-pipe')) $('slo-pipe').innerHTML = an ? [
+        ['Сообщений сегодня',an.messages_today||0],
+        ['LLM вызовов',an.llm_calls||0],
+        ['Задач завершено',an.tasks_completed||0],
+        ['Активных сессий',an.active_sessions||0],
+        ['База знаний',(an.knowledge_entries||0)+' записей'],
+        ['Аптайм системы',uptH.toFixed(1)+' ч'],
+      ].map(([k,v])=>'<div class="row"><span class="row-left">'+esc(k)+'</span><span style="color:var(--acc)">'+esc(String(v))+'</span></div>').join('')
+        : '<div class="alert alert-b">Нет данных Pipeline</div>';
+    });
   }
 }
 
@@ -2346,7 +2438,7 @@ async function runScout() {
 //  МОДЕЛИ ИИ
 // ═══════════════════════════════════════════════════════════════════════════
 async function loadLLM() {
-  const [llm,st] = await Promise.all([api('/api/llm'), api('/api/status')]);
+  const [llm,st,av5] = await Promise.all([api('/api/llm'), api('/api/status'), api('/api/v5/analytics').catch(()=>null)]);
   if (!llm) { $('llm-prov').innerHTML='<div class="alert alert-r">Нет данных о моделях</div>'; return; }
 
   const provs = Object.entries(llm);
@@ -2389,11 +2481,77 @@ async function loadLLM() {
       ['Watchdog',st.watchdog||'?'],
     ].map(([l,v]) => `<div class="row"><span class="row-left">${esc(l)}</span><span style="color:var(--acc);font-weight:600">${esc(String(v))}</span></div>`).join('');
   }
+  // LLM call stats from v5/analytics
+  const v5llm = av5&&av5.llm ? av5.llm : null;
+  const v5provs = v5llm&&v5llm.providers ? Object.entries(v5llm.providers) : [];
+  const totalCalls = v5llm ? (v5llm.total_calls||0) : 0;
+  const dailyCost = v5llm ? (v5llm.daily_cost_usd||0) : 0;
+  const dailyLim = v5llm ? (v5llm.daily_limit_usd||3) : 3;
+  const costPct = dailyLim>0 ? Math.min(100,dailyCost/dailyLim*100) : 0;
+  if($('llm-kpis')) $('llm-kpis').innerHTML = [
+    statCard((llm?Object.keys(llm).length:0),'Провайдеров','',''),
+    statCard((llm?Object.values(llm).filter(v=>v&&(typeof v!=='object'||v.available!==false)).length:0),'Активных','','stat-grn'),
+    statCard(totalCalls,'Вызовов сегодня','','stat-acc'),
+    statCard('$'+dailyCost.toFixed(4),'Расходы','из $'+dailyLim.toFixed(2),costPct<80?null:'stat-red'),
+  ].join('');
+  if($('llm-stats')) {
+    if(v5provs.length) {
+      $('llm-stats').innerHTML = v5provs.map(([name,v])=>{
+        if(!v||typeof v!=='object') return '';
+        const calls=v.calls||0, errs=v.errors||0, lat=v.latency||0;
+        const ok=v.available===true;
+        const provRu={openai:'OpenAI',anthropic:'Anthropic',groq:'Groq',together:'Together AI',cohere:'Cohere',openrouter:'OpenRouter',deepseek:'DeepSeek',huggingface:'HuggingFace',hf:'HuggingFace',claude:'Claude',grok:'Grok',cerebras:'Cerebras',mistral:'Mistral',perplexity:'Perplexity',ollama:'Ollama',gemini:'Gemini'};
+        return '<div class="row" style="padding:4px 0;border-bottom:1px solid var(--brd)">'
+          +'<span class="row-left">'+dot(ok)+'<span style="font-size:12px">'+esc(provRu[name]||name)+'</span></span>'
+          +'<div style="display:flex;gap:8px;font-size:10px;color:var(--txt3)">'
+          +(calls?'<span style="color:var(--acc)">'+calls+'</span>':'')
+          +(errs?'<span style="color:var(--red)">⚠'+errs+'</span>':'')
+          +(lat?'<span>'+fmtMs(lat)+'</span>':'')
+          +((!calls&&!errs&&!lat)?'<span>—</span>':'')
+          +'</div></div>';
+      }).filter(Boolean).join('') || '<div class="alert alert-b">Нет данных о вызовах</div>';
+    } else {
+      $('llm-stats').innerHTML='<div class="alert alert-b">Нет данных статистики. Запустите вызовы через чат.</div>';
+    }
+  }
+  if($('llm-cost')) {
+    const spent=dailyCost, lim=dailyLim, pct=costPct;
+    $('llm-cost').innerHTML='<div style="margin-bottom:12px"><div class="row"><span class="row-left">Сегодня потрачено</span><b style="color:var(--acc)">$'+spent.toFixed(4)+'</b></div>'
+      +'<div class="row"><span class="row-left">Дневной лимит</span><b>$'+lim.toFixed(2)+'</b></div>'
+      +'<div style="margin-top:8px">'+bar(pct,pct<70?'grn':pct<90?'yel':'red')+'</div>'
+      +'<div style="font-size:10px;color:var(--txt3);margin-top:4px">'+pct.toFixed(1)+'% от лимита использовано</div></div>'
+      +v5provs.filter(([,v])=>v&&v.available&&v.calls>0).map(([name,v])=>'<div class="row"><span class="row-left" style="font-size:11px">'+esc(name)+'</span><span style="color:var(--txt3);font-size:10px">'+((v.calls||0)+' вызовов')+'</span></div>').join('')
+      +(v5provs.filter(([,v])=>v&&v.available&&v.calls>0).length===0?'<div style="color:var(--txt3);font-size:11px;margin-top:6px">Вызовов сегодня не было</div>':'');
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  ЧАТ
 // ═══════════════════════════════════════════════════════════════════════════
+async function loadChat() {
+  const box=$('chat-box');
+  if(!box||box.children.length>0) return; // already has messages
+  const hist = await api('/api/chat/history').catch(()=>null);
+  if(hist&&Array.isArray(hist)&&hist.length) {
+    const recent = hist.slice(-25);
+    recent.forEach(m=>{
+      const isUser = m.role==='user';
+      const ts = m.ts ? new Date(m.ts*1000).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}) : '';
+      const div=document.createElement('div');
+      div.className = isUser?'cmsg cmsg-u':'cmsg cmsg-a';
+      const src = (m.source&&m.source!=='panel'&&m.source!=='user') ? '<span style="font-size:9px;color:var(--txt3);margin-right:4px">['+esc(m.source)+']</span>' : '';
+      div.innerHTML = src + _renderChatText(String(m.content||'').slice(0,400)+(String(m.content||'').length>400?'…':''))+'<div class="cmsg-ts">'+ts+'</div>';
+      box.appendChild(div);
+    });
+    box.scrollTop=box.scrollHeight;
+  } else {
+    const div=document.createElement('div');
+    div.className='cmsg cmsg-a';
+    div.innerHTML='👋 **MaxAI Ассистент** — система управления.\n\nДоступные команды: `помощь`, `баланс`, `статус`, `агенты`, `задачи`, `торговля`<div class="cmsg-ts">сейчас</div>';
+    box.appendChild(div);
+  }
+}
+
 function _renderChatText(text) {
   let h = esc(text);
   h = h.replace(/\[GREEN\]/g,  '<span class="cbadge cbadge-g">&#x25CF;&nbsp;OK</span>');
@@ -2806,7 +2964,7 @@ function showToast(msg,type,icon,dur){
   setTimeout(function(){t.style.animation="toastIn .3s reverse forwards";setTimeout(function(){if(t.parentNode)t.parentNode.removeChild(t);},350);},dur||3500);
 }
 // OMEGA v21: HYDRATION
-var _hFns={"observability":obsRefresh,trading:function(){if(typeof loadTrading!="undefined")loadTrading();},email:function(){if(typeof loadEmail!="undefined")loadEmail();},settings:function(){if(typeof loadSettings!="undefined")loadSettings();},arb:function(){if(typeof loadArb!="undefined")loadArb();},money:function(){if(typeof loadMoney!="undefined")loadMoney();},earnings:function(){if(typeof loadEarnings!="undefined")loadEarnings();},sales:function(){if(typeof loadSales!="undefined")loadSales();},dash:function(){if(typeof loadDash!='undefined')loadDash();},revenue:function(){if(typeof loadRevenue!='undefined')loadRevenue();},agents:function(){if(typeof loadAgents!='undefined')loadAgents();},tasks:function(){if(typeof loadTasks!='undefined')loadTasks();},services:function(){if(typeof loadServicesShop!='undefined')loadServicesShop();},llm:function(){if(typeof loadLLM!='undefined')loadLLM();},logs:function(){if(typeof loadLogs!='undefined')loadLogs();},quality:function(){if(typeof loadQuality!='undefined')loadQuality();},browser:function(){if(typeof brInitBookmarks!='undefined')brInitBookmarks();}};
+var _hFns={"observability":obsRefresh,trading:function(){if(typeof loadTrading!="undefined")loadTrading();},email:function(){if(typeof loadEmail!="undefined")loadEmail();},settings:function(){if(typeof loadSettings!="undefined")loadSettings();},arb:function(){if(typeof loadArb!="undefined")loadArb();},money:function(){if(typeof loadMoney!="undefined")loadMoney();},earnings:function(){if(typeof loadEarnings!="undefined")loadEarnings();},sales:function(){if(typeof loadSales!="undefined")loadSales();},dash:function(){if(typeof loadDash!='undefined')loadDash();},revenue:function(){if(typeof loadRevenue!='undefined')loadRevenue();},agents:function(){if(typeof loadAgents!='undefined')loadAgents();},tasks:function(){if(typeof loadTasks!='undefined')loadTasks();},services:function(){if(typeof loadServicesShop!='undefined')loadServicesShop();},llm:function(){if(typeof loadLLM!='undefined')loadLLM();},logs:function(){if(typeof loadLogs!='undefined')loadLogs();},quality:function(){if(typeof loadQuality!='undefined')loadQuality();},browser:function(){if(typeof brInitBookmarks!='undefined')brInitBookmarks();},failures:function(){if(typeof loadFailures!='undefined')loadFailures();},evolution:function(){if(typeof loadEvolution!='undefined')loadEvolution();},platforms:function(){if(typeof loadPlatforms!='undefined')loadPlatforms();},skills:function(){if(typeof loadSkills!='undefined')loadSkills();},scout:function(){if(typeof loadScout!='undefined')loadScout();},chat:function(){if(typeof loadChat!='undefined')loadChat();}};
 var _hT={};
 document.addEventListener("DOMContentLoaded",function(){
   document.querySelectorAll(".tb").forEach(function(tb){
@@ -2857,13 +3015,14 @@ function pauseProceed(pid){
 //  ТОРГОВЛЯ — loadTrading
 // ═══════════════════════════════════════════════════════════════
 async function loadTrading() {
-  const [pos, sig, bal, strats, pnl, hist] = await Promise.all([
+  const [pos, sig, bal, strats, pnl, hist, svcH] = await Promise.all([
     api('/api/trading/positions'),
     api('/api/trading/signals'),
     api('/api/trading/balance'),
     api('/api/bybit/strategies'),
     api('/api/trading/pnl'),
     api('/api/trading/history'),
+    api('/api/services/health').catch(()=>null),
   ]);
 
   const b = (bal&&bal.balance_usdt!==undefined)?bal:(bal||{});
@@ -2873,6 +3032,71 @@ async function loadTrading() {
     :Array.isArray(strats&&strats.strategies)?strats.strategies
     :(strats&&typeof strats==='object'?Object.entries(strats).map(([k,v])=>Object.assign({name:k},typeof v==='object'&&v?v:{})):[]);
   const enabledCount = stratList.filter(s=>s.enabled!==false).length;
+
+  // Circuit breaker widget
+  const db3 = svcH&&svcH.redis_db3;
+  const trdCB = $('trd-circuit');
+  if(trdCB) {
+    if(db3&&db3.ok) {
+      const state = db3.circuit_state||'CLOSED';
+      const vault = parseFloat(db3.vault_balance||'0');
+      const stCol = state==='OPEN'?'var(--red)':state==='HALF_OPEN'?'var(--yel)':'var(--grn)';
+      const stBg  = state==='OPEN'?'#ff305010':state==='HALF_OPEN'?'#ffb80010':'#00d88010';
+      const stBrd = state==='OPEN'?'#ff305040':state==='HALF_OPEN'?'#ffb80040':'#00d88040';
+      const ico   = state==='OPEN'?'🔴':state==='HALF_OPEN'?'🟡':'🟢';
+      trdCB.innerHTML = '<div style="background:'+stBg+';border:1px solid '+stBrd+';border-radius:8px;padding:10px 16px;display:flex;align-items:center;gap:18px;flex-wrap:wrap">'
+        +'<span style="font-size:18px">'+ico+'</span>'
+        +'<div><div style="font-size:10px;color:var(--txt3);letter-spacing:.5px">CIRCUIT BREAKER</div>'
+        +'<div style="font-size:15px;font-weight:800;color:'+stCol+'">'+state+'</div></div>'
+        +(vault>0?'<div><div style="font-size:10px;color:var(--txt3)">Vault</div><div style="font-size:13px;font-weight:700;color:var(--grn)">$'+vault.toFixed(2)+'</div></div>':'')
+        +(db3.regime?'<div><div style="font-size:10px;color:var(--txt3)">Режим</div><div style="font-size:12px;font-weight:600;color:var(--acc)">'+esc(db3.regime)+'</div></div>':'')
+        +'</div>';
+    } else {
+      trdCB.innerHTML = '';
+    }
+  }
+
+  // Risk overview card
+  const riskEl = $('trd-risk');
+  if(riskEl && positions.length) {
+    const totalPnl = positions.reduce((s,p)=>s+(+(p.pnl||p.unrealised_pnl||0)),0);
+    const totalMargin = positions.reduce((s,p)=>{
+      const ep=+(p.entry_price||0), sz=+(p.size||0), lev=+(p.leverage||1);
+      return s+(ep*sz/lev);
+    },0);
+    const posRisk = positions.map(p=>{
+      const mp=+(p.mark_price||0), ep=+(p.entry_price||0);
+      const sl=+(p.stop_loss||0), tp=+(p.take_profit||0);
+      const liq=+(p.liq_price||0);
+      const slDist = sl&&mp ? Math.abs((mp-sl)/mp*100) : null;
+      const liqDist = liq&&liq>0&&mp ? Math.abs((mp-liq)/mp*100) : null;
+      const pnlPct = ep>0 ? (+(p.pnl||0)/(ep*(+(p.size||0))/(+(p.leverage||1)))*100) : 0;
+      const g=(+(p.pnl||0))>=0;
+      const slCol = slDist==null?'var(--txt3)':(slDist<1?'var(--red)':slDist<3?'var(--yel)':'var(--grn)');
+      const liqCol = liqDist==null?'var(--txt3)':(liqDist<5?'var(--red)':liqDist<15?'var(--yel)':'var(--grn)');
+      return '<div style="padding:10px;margin-bottom:6px;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.06);border-radius:8px">'
+        +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
+        +'<span style="font-weight:700;font-size:12px;color:'+(p.side==='Buy'?'var(--grn)':'var(--red)')+'">'+(p.side==='Buy'?'▲ LONG':'▼ SHORT')+' '+esc(p.symbol||'')+'  ×'+esc(String(p.leverage||1))+'</span>'
+        +'<span style="font-size:13px;font-weight:800;color:'+(g?'var(--grn)':'var(--red)')+'">'+(g?'+':'')+(+(p.pnl||0)).toFixed(3)+'$ ('+pnlPct.toFixed(2)+'%)</span>'
+        +'</div>'
+        +'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:10px">'
+        +'<div><div style="color:var(--txt3)">SL расст.</div><div style="font-weight:700;color:'+slCol+'">'+( slDist!=null?slDist.toFixed(2)+'%':'—')+'</div></div>'
+        +'<div><div style="color:var(--txt3)">Лик. расст.</div><div style="font-weight:700;color:'+liqCol+'">'+(liqDist!=null?liqDist.toFixed(2)+'%':'—')+'</div></div>'
+        +'<div><div style="color:var(--txt3)">Текущ.</div><div style="font-weight:700;color:var(--txt)">$'+mp.toFixed(3)+'</div></div>'
+        +'<div><div style="color:var(--txt3)">Вход</div><div style="font-weight:700;color:var(--txt3)">$'+ep.toFixed(3)+'</div></div>'
+        +'</div></div>';
+    }).join('');
+    riskEl.innerHTML = '<div class="card">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+      +'<div class="card-title" style="margin:0"><span class="card-title-ico">🛡</span>Риск-обзор позиций</div>'
+      +'<span style="font-size:14px;font-weight:700;color:'+(totalPnl>=0?'var(--grn)':'var(--red)')+'">'+(totalPnl>=0?'+':'')+totalPnl.toFixed(3)+'$ нереализ.</span>'
+      +'</div>'
+      +posRisk
+      +(totalMargin>0?'<div style="margin-top:8px;font-size:10px;color:var(--txt3)">Использовано маржи: $'+totalMargin.toFixed(2)+'</div>':'')
+      +'</div>';
+  } else if(riskEl) {
+    riskEl.innerHTML = '';
+  }
 
   const kpis=$('trd-kpis');
   if(kpis) kpis.innerHTML=[
@@ -2986,7 +3210,25 @@ async function loadTrading() {
           +'</div>';
       }).join('');
     } else {
-      pnlEl.innerHTML='<div style="text-align:center;padding:20px;color:var(--txt3)">Нет истории PnL</div>';
+      // No history: show current positions PnL snapshot
+      const posSnap = (pos&&pos.positions)||[];
+      if(posSnap.length) {
+        const totalPnl = posSnap.reduce((s,p)=>s+(+(p.pnl||p.unrealised_pnl||0)),0);
+        const gp = totalPnl>=0;
+        pnlEl.innerHTML='<div style="text-align:center;padding:12px 8px;background:'+(gp?'rgba(0,232,122,.06)':'rgba(255,45,85,.06)')+';border:1px solid '+(gp?'rgba(0,232,122,.2)':'rgba(255,45,85,.2)')+';border-radius:10px;margin-bottom:8px">'
+          +'<div style="font-size:11px;color:var(--txt3);margin-bottom:4px">Текущий нереализованный PnL</div>'
+          +'<div style="font-size:22px;font-weight:800;color:'+(gp?'var(--grn)':'var(--red)')+'">'+(gp?'+':'')+totalPnl.toFixed(3)+'$</div>'
+          +'<div style="font-size:10px;color:var(--txt3);margin-top:4px">'+posSnap.length+' активных позиций</div></div>'
+          +posSnap.map(p=>{
+            const v=+(p.pnl||p.unrealised_pnl||0),g=v>=0;
+            return '<div class="row" style="padding:5px 0;border-bottom:1px solid var(--brd)">'
+              +'<span style="color:var(--txt3);font-size:11px">'+(p.side==='Buy'?'▲':'▼')+' '+esc(p.symbol||'')+'</span>'
+              +'<span style="color:'+(g?'var(--grn)':'var(--red)')+';font-weight:700">'+(g?'+':'')+v.toFixed(4)+'$</span>'
+              +'</div>';
+          }).join('');
+      } else {
+        pnlEl.innerHTML='<div style="text-align:center;padding:20px;color:var(--txt3)"><div style="font-size:24px;margin-bottom:8px">📊</div><div>История PnL пока пуста</div><div style="font-size:11px;margin-top:4px">Данные появятся после закрытия первой сделки</div></div>';
+      }
     }
   }
 
