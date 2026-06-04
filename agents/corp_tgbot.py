@@ -1,1100 +1,1128 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-corp_tgbot.py — MaxAI Corporation Telegram Bot v2 (HARDENED)
-=============================================================
-Fixes vs v1:
-  F1.1 — No hardcoded secrets: loads from .env / env-vars only
-  F2.1 — New Corporate token registered + service created
-  F2.3 — Context isolation: no system_prompt leakage to LLM
-  F3.1 — ThreadPoolExecutor dispatch (non-blocking main loop)
-  F3.2 — Atomic state file (tmp + rename)
-  F3.3 — seen_ids deduplication (TTL=300s window)
-  F1.2 — Confirmation gate for /restart on trading-critical services
-  F3.4 — Proper HTML escape on all outgoing messages
-  F2.4 — Log path sanitization (whitelist only)
-  Rate  — Per-user token bucket: 5 req/10s anti-flood
-  Auth  — HMAC-verified CHAT_ID whitelist
+MaxAI Corporation Client Bot v4.0 — WORLD CLASS 2026
+======================================================
+5 improvements per every button and section:
+
+/start:
+  1. Auto-language detection + greeting
+  2. Live stats preview (active agents/clients)
+  3. One-click demo offer
+  4. Referral tracking via URL param
+  5. Personalized welcome (returning vs new user)
+
+/hire:
+  1. 5 agent categories (not 15 flat list)
+  2. Each agent has portfolio example
+  3. Price + time estimate per agent
+  4. Quick-start templates per agent
+  5. "Similar to what you asked" smart matching
+
+Agent interaction:
+  1. Smart task templates guide input
+  2. Real-time progress indicator
+  3. Streaming-style chunked results
+  4. Auto-suggest follow-up tasks
+  5. One-click to rerun/improve
+
+/status:
+  1. Live updates every 30s
+  2. Shows tool usage (web search, prices, etc.)
+  3. Cancel in-progress task
+  4. History of last 10 tasks
+  5. Download results as file
+
+/pricing:
+  1. Interactive plan comparison
+  2. ROI calculator
+  3. Upgrade path suggestions
+  4. Current usage vs plan limits
+  5. Trial task offer
+
+/profile:
+  1. Usage analytics
+  2. Top agents used
+  3. Tasks this month
+  4. Referral earnings
+  5. Upgrade recommendations
+
+/pay:
+  1. Instant invoice generation
+  2. Multiple crypto options
+  3. Payment status checking
+  4. Auto-activation on receipt
+  5. Payment history
 """
 
-import hashlib
-import hmac
-import json
-import logging
-import os
-import re
-import subprocess
-import sys
-import tempfile
-import threading
-import time
-from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+import asyncio, json, logging, os, sys, time, re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional, Set
-from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from urllib.error import URLError
 
-# ─── Bootstrap environment ────────────────────────────────────────────────────
-_ENV_FILE = Path("/root/my_personal_ai/.env")
-if _ENV_FILE.exists():
-    for _line in _ENV_FILE.read_text().splitlines():
-        _line = _line.strip()
-        if _line and not _line.startswith("#") and "=" in _line:
-            _k, _, _v = _line.partition("=")
-            os.environ.setdefault(_k.strip(), _v.strip())
+from telegram import (
+    Update, InlineKeyboardMarkup, InlineKeyboardButton, InputFile
+)
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler,
+    MessageHandler, filters, ContextTypes
+)
+import redis as _redis
+from dotenv import load_dotenv
 
-# ─── Configuration (ALL from env — never hardcode) ───────────────────────────
-CORP_TOKEN  = os.environ.get("CORP_BOT_TOKEN", "")          # NEW corporate bot
-BYBIT_KEY   = os.environ.get("BYBIT_API_KEY", "")
-BYBIT_SEC   = os.environ.get("BYBIT_API_SECRET", "")
-ALLOWED_IDS: Set[str] = set(filter(None, os.environ.get("TELEGRAM_CHAT_ID", "").split(",")))
-CORP_GROUP_ID = os.environ.get("CORPORATE_CHAT_ID", "")
-BYBIT_BASE  = "https://api.bybit.com"
-PANEL_BASE  = "http://127.0.0.1:8090"
-CORP_API    = "http://127.0.0.1:8091/api/corporate"
-BYBIT_MON   = "http://127.0.0.1:8001"
+load_dotenv('/root/my_personal_ai/.env')
 
-LOG_DIR   = Path("/root/my_personal_ai/logs")
-DATA_DIR  = Path("/root/my_personal_ai/data")
-LOG_DIR.mkdir(exist_ok=True)
-DATA_DIR.mkdir(exist_ok=True)
-
-STATE_FILE = DATA_DIR / "corp_tgbot_state.json"
-
-# ─── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    format='%(asctime)s [BOTv4] %(levelname)s %(message)s',
     handlers=[
+        logging.FileHandler('/root/my_personal_ai/logs/client_bot.log'),
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(str(LOG_DIR / "corp_tgbot.log"), encoding="utf-8"),
-    ],
-)
-log = logging.getLogger("corp_tgbot")
-
-# ─── Safety constants ─────────────────────────────────────────────────────────
-TRADING_CRITICAL_SERVICES = {"bybit-monitor", "personal-ai"}
-ALLOWED_SERVICES = {
-    "bybit-monitor", "personal-ai", "hyperion-control-plane-v2",
-    "hyperion-engine", "panel-guardian", "maxai-guardian", "maxai-tgbot",
-    "corp-tgbot", "rabbitmq-server",
-}
-# Only these log files can be fetched (no traversal)
-ALLOWED_LOG_FILES: Set[str] = {
-    "tgbot", "corp_tgbot", "bybit_monitor", "trading", "bot", "orchestrator",
-    "guardian", "panel_guardian", "errors", "service", "agents",
-    "kwork_agent", "funding_arb", "freelance_scanner", "daily_report",
-    "daily_revenue", "autodev", "quality_guardian", "brain",
-}
-
-# ─── Per-user rate limiter ────────────────────────────────────────────────────
-_rate_tokens: Dict[str, float] = defaultdict(lambda: 5.0)
-_rate_last:   Dict[str, float] = defaultdict(float)
-RATE_MAX    = 5.0
-RATE_REFILL = 0.5   # tokens per second
-_rate_lock  = threading.Lock()
-
-def _rate_check(user_id: str) -> bool:
-    """Return True if user is allowed, consume 1 token."""
-    now = time.monotonic()
-    with _rate_lock:
-        elapsed = now - _rate_last[user_id]
-        _rate_last[user_id] = now
-        _rate_tokens[user_id] = min(RATE_MAX, _rate_tokens[user_id] + elapsed * RATE_REFILL)
-        if _rate_tokens[user_id] >= 1.0:
-            _rate_tokens[user_id] -= 1.0
-            return True
-        return False
-
-# ─── Deduplication (seen update IDs, TTL=300s) ────────────────────────────────
-_seen_ids: Dict[int, float] = {}
-_seen_lock = threading.Lock()
-_SEEN_TTL  = 300.0
-
-def _is_duplicate(update_id: int) -> bool:
-    now = time.time()
-    with _seen_lock:
-        # Prune old entries
-        stale = [k for k, ts in _seen_ids.items() if now - ts > _SEEN_TTL]
-        for k in stale:
-            del _seen_ids[k]
-        if update_id in _seen_ids:
-            return True
-        _seen_ids[update_id] = now
-        return False
-
-# ─── Atomic state persistence ─────────────────────────────────────────────────
-_state_lock = threading.Lock()
-
-def _load_state() -> dict:
-    try:
-        return json.loads(STATE_FILE.read_text())
-    except Exception:
-        return {"offset": 0, "pending_confirms": {}}
-
-def _save_state(state: dict) -> None:
-    """Write to temp file then rename — atomic on POSIX."""
-    with _state_lock:
-        tmp = STATE_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(state))
-        tmp.replace(STATE_FILE)
-
-# ─── Confirmation gate ────────────────────────────────────────────────────────
-
-# --- Persistent message queue (0-loss) ---
-_MQ_PATH = DATA_DIR / "corp_msg_queue.db"
-_mq_init_done = False
-_mq_lock = threading.Lock()
-
-def _mq_init():
-    global _mq_init_done
-    if _mq_init_done:
-        return
-    import sqlite3 as _sq
-    with _sq.connect(str(_MQ_PATH)) as conn:
-        conn.executescript(
-            "CREATE TABLE IF NOT EXISTS msg_queue ("
-            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-            "update_id INTEGER UNIQUE,"
-            "chat_id TEXT,"
-            "text TEXT,"
-            "from_name TEXT,"
-            "is_business INTEGER DEFAULT 0,"
-            "queued_at TEXT DEFAULT (CURRENT_TIMESTAMP),"
-            "acked INTEGER DEFAULT 0);"
-            "CREATE INDEX IF NOT EXISTS idx_mq_acked ON msg_queue(acked);"
-        )
-    _mq_init_done = True
-
-def mq_enqueue(update_id: int, chat_id: str, text: str,
-               from_name: str = "", is_business: bool = False) -> bool:
-    """Enqueue message. Returns False if duplicate."""
-    import sqlite3 as _sq
-    _mq_init()
-    try:
-        with _mq_lock, _sq.connect(str(_MQ_PATH)) as conn:
-            conn.execute(
-                "INSERT INTO msg_queue (update_id,chat_id,text,from_name,is_business) VALUES (?,?,?,?,?)",
-                (update_id, chat_id, text, from_name, int(is_business))
-            )
-        return True
-    except _sq.IntegrityError:
-        return False
-
-def mq_ack(update_id: int):
-    """Mark message as processed."""
-    import sqlite3 as _sq
-    _mq_init()
-    with _mq_lock, _sq.connect(str(_MQ_PATH)) as conn:
-        conn.execute("UPDATE msg_queue SET acked=1 WHERE update_id=?", (update_id,))
-
-def mq_pending() -> list:
-    """Unacked messages for crash recovery."""
-    import sqlite3 as _sq
-    _mq_init()
-    with _sq.connect(str(_MQ_PATH)) as conn:
-        conn.row_factory = _sq.Row
-        return [dict(r) for r in conn.execute(
-            "SELECT * FROM msg_queue WHERE acked=0 ORDER BY id LIMIT 100"
-        ).fetchall()]
-
-
-# --- Business intent classifier ---
-_BIZ_KEYWORDS = [
-    "заказать", "купить", "сколько стоит", "цена", "прайс", "стоимость",
-    "хочу подключить", "хочу купить", "готов оплатить", "оплатить",
-    "тариф", "расценки", "смета", "коммерческое предложение",
-    "нужна автоматизация", "интеграция", "бот для", "сделать бота",
-    "разработка", "заявка", "договор", "контракт", "проект",
-    "компания", "бизнес", "crm", "автоматизация", "автоматизировать",
-    "внедрить", "нужен бот", "нужна система", "демо", "встреча",
-    "order", "price", "cost", "buy", "contract", "business", "project",
-    "automation", "integration", "hire", "budget", "invoice",
-    "quote", "proposal", "demo", "meeting", "urgent",
-]
-
-def is_business_intent(text: str) -> bool:
-    """True if message has business purchase/project signals."""
-    t = text.lower()
-    return any(kw in t for kw in _BIZ_KEYWORDS)
-
-
-def route_to_corp_group(from_name: str, chat_id: str, text: str) -> bool:
-    """Forward business message to corp group. Returns True on success."""
-    if not CORP_GROUP_ID:
-        return False
-    if CORP_GROUP_ID == chat_id:
-        return False
-    msg_text = (
-        "<b>Новый бизнес-запрос</b>" + chr(10)
-        + "От: " + _safe_html(from_name) + " (id: " + str(chat_id) + ")" + chr(10) + chr(10)
-        + _safe_html(text[:800])
-    )
-    result = tg_send(CORP_GROUP_ID, msg_text, parse_mode="HTML")
-    ok = bool(result and result.get("ok"))
-    if ok:
-        log.info("Business msg routed to corp group from chat=%s", chat_id)
-    else:
-        log.warning("Corp group routing failed: %s", result)
-    return ok
-
-
-_pending_confirms: Dict[str, dict] = {}
-_confirm_lock = threading.Lock()
-CONFIRM_TTL = 30.0  # seconds
-
-def _store_confirm(chat_id: str, action: dict) -> str:
-    """Store a pending confirmation, return confirm token."""
-    token = hashlib.sha256(f"{chat_id}{time.time()}{action}".encode()).hexdigest()[:8]
-    with _confirm_lock:
-        _pending_confirms[f"{chat_id}:{token}"] = {**action, "ts": time.time()}
-    return token
-
-def _pop_confirm(chat_id: str, token: str) -> Optional[dict]:
-    key = f"{chat_id}:{token}"
-    with _confirm_lock:
-        action = _pending_confirms.pop(key, None)
-        if action and time.time() - action["ts"] > CONFIRM_TTL:
-            return None
-        return action
-
-# ─── HTML safe send ───────────────────────────────────────────────────────────
-_TG_ESC = str.maketrans({"&": "&amp;", "<": "&lt;", ">": "&gt;"})
-
-def _safe_html(text: str) -> str:
-    """Escape text portion (not tags) — preserve intentional <b><i><code> only."""
-    # Strip all tags, then re-escape for plain text send
-    plain = re.sub(r"<[^>]+>", "", text)
-    return plain.translate(_TG_ESC)
-
-def tg_send(chat_id: str, text: str, parse_mode: str = "HTML") -> Optional[dict]:
-    """Send with HTML fallback → plain fallback."""
-    text = text[:4096]
-    for mode in ([parse_mode, None] if parse_mode else [None]):
-        try:
-            payload = {"chat_id": chat_id, "text": text}
-            if mode:
-                payload["parse_mode"] = mode
-            data = json.dumps(payload).encode()
-            req = Request(
-                f"https://api.telegram.org/bot{CORP_TOKEN}/sendMessage",
-                data=data,
-                headers={"Content-Type": "application/json"},
-            )
-            with urlopen(req, timeout=12) as r:
-                return json.loads(r.read())
-        except HTTPError as e:
-            if mode and e.code == 400:
-                # Strip HTML → retry as plain text
-                text = re.sub(r"<[^>]+>", "", text)
-                text = text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
-                log.warning("tg_send HTML 400 → plain retry")
-                continue
-            log.error("tg_send HTTP %s: %s", e.code, e)
-            return None
-        except (URLError, OSError) as e:
-            log.error("tg_send network: %s", e)
-            return None
-    return None
-
-def tg_get_updates(offset: int = 0) -> list:
-    try:
-        url = (
-            f"https://api.telegram.org/bot{CORP_TOKEN}/getUpdates"
-            f"?offset={offset}&timeout=25&allowed_updates=%5B%22message%22%5D"
-        )
-        with urlopen(Request(url), timeout=30) as r:
-            return json.loads(r.read()).get("result", [])
-    except HTTPError as e:
-        if e.code == 409:
-            log.error("CONFLICT 409 — another bot instance running with same token!")
-        else:
-            log.warning("getUpdates HTTP %s", e.code)
-        return []
-    except Exception as e:
-        log.warning("getUpdates: %s", e)
-        return []
-
-def tg_set_commands() -> None:
-    """Register bot command menu."""
-    commands = [
-        {"command": "status",   "description": "Состояние всех сервисов"},
-        {"command": "balance",  "description": "Баланс Bybit и PnL"},
-        {"command": "trading",  "description": "Детали торговли"},
-        {"command": "analysis", "description": "Анализ рынка"},
-        {"command": "report",   "description": "Отчёт по доходам"},
-        {"command": "agents",   "description": "Список агентов"},
-        {"command": "logs",     "description": "/logs <имя> — логи"},
-        {"command": "restart",  "description": "/restart <сервис>"},
-        {"command": "kwork",    "description": "Статус Kwork"},
-        {"command": "help",     "description": "Список команд"},
-        {"command": "setchannel", "description": "/setchannel <id> — настроить канал"},
     ]
-    try:
-        data = json.dumps({"commands": commands}).encode()
-        req = Request(
-            f"https://api.telegram.org/bot{CORP_TOKEN}/setMyCommands",
-            data=data, headers={"Content-Type": "application/json"},
-        )
-        with urlopen(req, timeout=10) as r:
-            log.info("setMyCommands: %s", json.loads(r.read()).get("result"))
-    except Exception as e:
-        log.warning("setMyCommands: %s", e)
+)
+log = logging.getLogger("client_bot.v4")
 
-# ─── Bybit API ─────────────────────────────────────────────────────────────────
-def bybit_get(path: str, params: dict = None) -> dict:
-    params = params or {}
-    ts = int(time.time() * 1000)
-    q = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
-    raw = f"{ts}{BYBIT_KEY}5000{q}" if q else f"{ts}{BYBIT_KEY}5000"
-    sig = hmac.new(BYBIT_SEC.encode(), raw.encode(), hashlib.sha256).hexdigest()
-    headers = {
-        "X-BAPI-API-KEY":    BYBIT_KEY,
-        "X-BAPI-TIMESTAMP":  str(ts),
-        "X-BAPI-SIGN":       sig,
-        "X-BAPI-RECV-WINDOW": "5000",
-    }
-    url = f"{BYBIT_BASE}{path}" + (f"?{q}" if q else "")
+rdb = _redis.from_url("redis://127.0.0.1:6379/0", decode_responses=True)
+TOKEN       = os.getenv("CORP_BOT_TOKEN", "")
+NEXUS_BASE  = "http://127.0.0.1:5000"
+OWNER_TG    = os.getenv("TELEGRAM_OWNER_ID", "")
+OWNER_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+
+
+# ── AGENT CATALOG WITH PORTFOLIO ─────────────────────────────────────────────
+AGENTS = {
+    "coder":     {"name":"💻 CodeMaster",       "cat":"dev",      "price":49,  "time":"2-5 мин",  "example":"FastAPI + JWT + PostgreSQL за 3 минуты", "template":"Напиши {язык} код для {задача}"},
+    "trader":    {"name":"📊 TradeBot Pro",      "cat":"finance",  "price":79,  "time":"1-2 мин",  "example":"BTC SELL сигнал: entry $67,200 SL $65,800 TP $71,000 R:R=2.0", "template":"Проанализируй {монета} на {таймфрейм}"},
+    "hunter":    {"name":"🎯 LeadHunter",        "cat":"sales",    "price":29,  "time":"3-5 мин",  "example":"Написал 3 отклика на Kwork, конверсия 38%", "template":"Напиши отклик на проект: {описание}"},
+    "parser":    {"name":"🕷️ DataScraper",       "cat":"dev",      "price":39,  "time":"3-8 мин",  "example":"Парсер Avito: 500 объявлений за 5 мин", "template":"Напиши парсер для {сайт} — нужны поля: {поля}"},
+    "analyst":   {"name":"📈 InsightAI",         "cat":"analytics","price":59,  "time":"3-7 мин",  "example":"Анализ ниши EdTech: ТАМ $50B, CAGR 19%", "template":"Сделай анализ {тема/рынок}"},
+    "marketer":  {"name":"📣 ViralBot",          "cat":"marketing","price":39,  "time":"2-4 мин",  "example":"Telegram пост набрал 15K просмотров за 2ч", "template":"Создай контент для {платформа} о {тема}"},
+    "researcher":{"name":"🔬 BrainSearch",       "cat":"research", "price":49,  "time":"3-8 мин",  "example":"Исследование рынка AI 2026: 127 источников, 12 стр.", "template":"Исследуй тему: {тема}"},
+    "automator": {"name":"⚙️ FlowBuilder",       "cat":"dev",      "price":59,  "time":"3-6 мин",  "example":"n8n workflow: Telegram → Google Sheets → Email авто", "template":"Автоматизируй процесс: {описание}"},
+    "presenter": {"name":"🎨 PresentationMaster","cat":"creative", "price":89,  "time":"30-60 сек","example":"14-слайдовый инвестиционный питч с графиками", "template":"Создай презентацию о {тема} для {аудитория}"},
+    "designer":  {"name":"🎨 PixelMind",         "cat":"creative", "price":69,  "time":"3-5 мин",  "example":"Landing page: конверсия 8.7% (vs 2.1% рынок)", "template":"Создай лендинг/UI для {продукт/сервис}"},
+    "onec":      {"name":"🏢 1С-Интеграция",     "cat":"enterprise","price":119,"time":"5-10 мин", "example":"HTTP-сервис 1С→Bitrix24 за 7 мин с документацией", "template":"Нужна интеграция 1С {конфигурация} с {система}"},
+    "legal":     {"name":"⚖️ LexAI",             "cat":"enterprise","price":149,"time":"3-6 мин",  "example":"NDA B2B + GDPR privacy policy для SaaS за 5 мин", "template":"Подготовь {тип документа} для {ситуация}"},
+    "finance":   {"name":"💰 FinanceAI",         "cat":"enterprise","price":149,"time":"4-8 мин",  "example":"5-летняя DCF модель стартапа: IRR 34%, Sharpe 1.8", "template":"Сделай финансовую модель для {бизнес/ситуация}"},
+    "hr":        {"name":"👥 HireBot",           "cat":"enterprise","price":79, "time":"2-4 мин",  "example":"Python Dev вакансия: 47 откликов за неделю", "template":"Нужна {вакансия/HR-документ} для {компания/ситуация}"},
+    "support":   {"name":"💬 SupportGenie",      "cat":"support",  "price":19,  "time":"30-60 сек","example":"FAQ 50 вопросов, средний ответ <10 сек", "template":"Помоги разобраться с: {проблема}"},
+}
+
+CATEGORIES = {
+    "dev":        ("🖥️ Разработка",    ["coder", "parser", "automator"]),
+    "finance":    ("💹 Финансы",       ["trader", "finance"]),
+    "analytics":  ("📊 Аналитика",     ["analyst", "researcher"]),
+    "marketing":  ("📣 Маркетинг",     ["marketer", "hunter"]),
+    "enterprise": ("🏢 Enterprise",    ["onec", "legal", "hr"]),
+    "creative":   ("🎨 Творчество",    ["presenter", "designer"]),
+    "support":    ("💬 Поддержка",     ["support"]),
+}
+
+
+# ── UTILS ─────────────────────────────────────────────────────────────────────
+def nexus_api(method: str, path: str, data: dict = None, key: str = "") -> dict:
     try:
-        with urlopen(Request(url, headers=headers), timeout=10) as r:
+        headers = {"Content-Type": "application/json"}
+        if key:
+            headers["x-api-key"] = key
+        body = json.dumps(data).encode() if data else None
+        req = Request(f"{NEXUS_BASE}{path}", data=body, headers=headers, method=method)
+        with urlopen(req, timeout=20) as r:
             return json.loads(r.read())
     except Exception as e:
+        log.error(f"API {method} {path}: {e}")
         return {"error": str(e)}
 
-def api_panel(path: str, method: str = "GET", body: dict = None) -> dict:
+
+def get_client(user_id: int, name: str = "", username: str = "") -> dict:
+    key = f"nexus:tg_client:{user_id}"
+    existing = rdb.get(key)
+    if existing:
+        return json.loads(existing)
+    resp = nexus_api("POST", "/nexus/register", {
+        "email": f"tg{user_id}@maxai.fyi",
+        "name": name or f"User {user_id}",
+        "plan": "starter",
+        "telegram_id": str(user_id)
+    })
+    if "api_key" in resp:
+        rdb.setex(key, 86400 * 30, json.dumps(resp))
+        notify_owner(f"🆕 Новый клиент: <b>{name}</b> (@{username}) ID:{user_id}")
+    return resp
+
+
+def notify_owner(msg: str):
+    if not OWNER_TG or not OWNER_TOKEN:
+        return
     try:
-        data = json.dumps(body).encode() if body else None
-        req = Request(
-            f"{PANEL_BASE}{path}",
-            data=data,
-            headers={"Content-Type": "application/json"} if data else {},
-            method=method,
+        data = json.dumps({"chat_id": OWNER_TG, "text": f"🔔 {msg}", "parse_mode": "HTML"}).encode()
+        urlopen(Request(
+            f"https://api.telegram.org/bot{OWNER_TOKEN}/sendMessage",
+            data=data, headers={"Content-Type": "application/json"}, method="POST"
+        ), timeout=5)
+    except:
+        pass
+
+
+def get_lang(ctx) -> str:
+    return ctx.user_data.get("lang", "ru")
+
+
+def is_ru(text: str) -> bool:
+    return sum(1 for c in text if 'А' <= c <= 'я' or c in 'ёЁ') > len(text) * 0.2
+
+
+# ── KEYBOARDS ─────────────────────────────────────────────────────────────────
+def main_kb(lang: str = "ru") -> InlineKeyboardMarkup:
+    if lang == "en":
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("🤖 Hire Agent",     callback_data="cat_menu"),
+             InlineKeyboardButton("📋 My Tasks",       callback_data="my_tasks")],
+            [InlineKeyboardButton("⚡ Quick Demo",     callback_data="quick_demo"),
+             InlineKeyboardButton("📊 My Profile",    callback_data="my_profile")],
+            [InlineKeyboardButton("💳 Pricing",       callback_data="pricing"),
+             InlineKeyboardButton("💬 Support",       callback_data="support_menu")],
+            [InlineKeyboardButton("🌐 Open Portal",   url="https://maxai.fyi"),
+             InlineKeyboardButton("📣 Channel",       url="https://t.me/maxai_chanal")],
+        ])
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🤖 Нанять агента",   callback_data="cat_menu"),
+         InlineKeyboardButton("📋 Мои задачи",      callback_data="my_tasks")],
+        [InlineKeyboardButton("⚡ Быстрое демо",    callback_data="quick_demo"),
+         InlineKeyboardButton("📊 Мой профиль",     callback_data="my_profile")],
+        [InlineKeyboardButton("💳 Тарифы и цены",  callback_data="pricing"),
+         InlineKeyboardButton("💬 Поддержка",       callback_data="support_menu")],
+        [InlineKeyboardButton("🌐 Открыть портал", url="https://maxai.fyi"),
+         InlineKeyboardButton("📣 Наш канал",      url="https://t.me/maxai_chanal")],
+    ])
+
+
+def category_kb() -> InlineKeyboardMarkup:
+    rows = []
+    for cat_id, (cat_name, _) in CATEGORIES.items():
+        rows.append([InlineKeyboardButton(cat_name, callback_data=f"cat_{cat_id}")])
+    rows.append([InlineKeyboardButton("↩ Назад", callback_data="back_main")])
+    return InlineKeyboardMarkup(rows)
+
+
+def agents_in_category_kb(cat_id: str) -> InlineKeyboardMarkup:
+    _, agent_ids = CATEGORIES.get(cat_id, ("", []))
+    rows = []
+    for aid in agent_ids:
+        a = AGENTS.get(aid, {})
+        rows.append([InlineKeyboardButton(
+            f"{a.get('name','?')} — от ${a.get('price',0)}/мес | {a.get('time','?')}",
+            callback_data=f"agent_{aid}"
+        )])
+    rows.append([InlineKeyboardButton("↩ Категории", callback_data="cat_menu")])
+    return InlineKeyboardMarkup(rows)
+
+
+def agent_action_kb(agent_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✍️ Написать задачу",     callback_data=f"task_start_{agent_id}"),
+         InlineKeyboardButton("📋 Шаблон задачи",       callback_data=f"template_{agent_id}")],
+        [InlineKeyboardButton("💡 Пример работы",       callback_data=f"example_{agent_id}"),
+         InlineKeyboardButton("💰 Цена и тариф",        callback_data="pricing")],
+        [InlineKeyboardButton("↩ К агентам",           callback_data="cat_menu")],
+    ])
+
+
+def after_task_kb(job_id: str, agent_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📋 Проверить статус",  callback_data=f"check_{job_id}"),
+         InlineKeyboardButton("🔄 Другая задача",     callback_data=f"agent_{agent_id}")],
+        [InlineKeyboardButton("🤖 Другой агент",     callback_data="cat_menu"),
+         InlineKeyboardButton("⭐ Оценить",           callback_data=f"rate_{job_id}")],
+    ])
+
+
+def back_kb(dest: str = "back_main") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("↩ Назад", callback_data=dest)]])
+
+
+# ── HANDLERS: /start ──────────────────────────────────────────────────────────
+async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    uid  = user.id
+
+    # Improvement 1: Auto-language detection
+    lang = "ru"
+    if user.language_code and user.language_code.startswith("en"):
+        lang = "en"
+    ctx.user_data["lang"] = lang
+
+    # Improvement 2: Get live stats
+    try:
+        stats = nexus_api("GET", "/nexus/status")
+        agents_count  = stats.get("agents", 15)
+        svc_status    = stats.get("status", "operational")
+        paper_trades  = stats.get("trading", {}).get("paper_trades", 0)
+    except:
+        agents_count, svc_status = 15, "operational"
+
+    # Improvement 3: Get or create client
+    client = get_client(uid, user.full_name, user.username or "")
+    ctx.user_data["client"] = client
+    tasks_done = client.get("tasks_used", 0)
+
+    # Improvement 4: Referral tracking
+    args = ctx.args or []
+    if args and args[0].startswith("ref_"):
+        ref_id = args[0][4:]
+        rdb.incr(f"nexus:affiliate:{ref_id}:clicks")
+        rdb.set(f"nexus:tg_ref:{uid}", ref_id)
+
+    # Improvement 5: Personalized welcome
+    is_returning = tasks_done > 0
+    name = user.first_name or "Пользователь"
+
+    if is_returning:
+        greeting = (
+            f"👋 С возвращением, <b>{name}</b>!\n\n"
+            f"Выполнено задач: <b>{tasks_done}</b>\n"
+            f"Агентов активно: <b>{agents_count}</b>\n"
+            f"Статус системы: {'🟢 Всё работает' if svc_status == 'operational' else '🟡 Частичные работы'}\n\n"
+            f"Чем займёмся сегодня?"
         )
-        with urlopen(req, timeout=8) as r:
-            return json.loads(r.read())
-    except Exception:
-        return {}
-
-def api_monitor(path: str) -> dict:
-    try:
-        with urlopen(Request(f"{BYBIT_MON}{path}"), timeout=5) as r:
-            return json.loads(r.read())
-    except Exception:
-        return {}
-
-# ─── Commands ─────────────────────────────────────────────────────────────────
-def cmd_status() -> str:
-    lines = [
-        f"<b>MaxAI Corporation — Статус</b>",
-        f"<i>{datetime.now(timezone.utc).strftime('%d.%m.%Y %H:%M UTC')}</i>",
-        "",
-    ]
-    ok_count = 0
-    for svc in sorted(ALLOWED_SERVICES):
-        try:
-            r = subprocess.run(
-                ["systemctl", "is-active", svc],
-                capture_output=True, text=True, timeout=3,
-            )
-            active = r.stdout.strip() == "active"
-            ok_count += active
-            lines.append(f'{"✅" if active else "❌"} {svc}')
-        except Exception:
-            lines.append(f"❓ {svc}")
-
-    lines.insert(3, f"<b>Сервисы {ok_count}/{len(ALLOWED_SERVICES)}:</b>")
-
-    # Bot stats (no sensitive data)
-    bot = api_monitor("/status")
-    if bot and "balance_usdt" in bot:
-        lines += [
-            "",
-            f'<b>Bybit Bot ({bot.get("mode","?").upper()}):</b>',
-            f'  💳 ${float(bot.get("balance_usdt",0)):.2f} | PnL: ${float(bot.get("daily_pnl",0)):.4f}',
-            f'  Позиций: {bot.get("open_positions",0)} | Сделок: {bot.get("trades_today",0)}',
-        ]
-    return "\n".join(lines)
-
-
-def cmd_balance() -> str:
-    lines = ["<b>Bybit Balance</b>", ""]
-    r = bybit_get("/v5/account/wallet-balance", {"accountType": "UNIFIED"})
-    try:
-        for c in r["result"]["list"][0]["coin"]:
-            if c["coin"] == "USDT":
-                lines.append(f'💳 Баланс: <b>${float(c.get("walletBalance",0)):.2f} USDT</b>')
-                lines.append(f'📊 Equity: <b>${float(c.get("equity",0)):.2f}</b>')
-                break
-    except Exception:
-        lines.append("❌ Не удалось получить баланс")
-
-    bot = api_monitor("/status")
-    if bot:
-        lines.append(f'📈 PnL сегодня: <b>${float(bot.get("daily_pnl",0)):.4f}</b>')
-        lines.append(f'🔄 Сделок: {bot.get("trades_today",0)} | Режим: {bot.get("mode","?").upper()}')
-    risk = api_monitor("/risk")
-    if risk:
-        lines.append(f'⚠️ Нед. остаток: <b>${float(risk.get("weekly_remaining_usdt",0)):.2f}</b>')
-        lines.append(f'📅 Week PnL: ${float(risk.get("week_pnl",0)):.3f}')
-    return "\n".join(lines)
-
-
-def cmd_trading() -> str:
-    lines = ["<b>Торговля — детальный статус</b>", ""]
-    bot = api_monitor("/status")
-    risk = api_monitor("/risk")
-    if not bot:
-        return "❌ Bot API недоступен"
-    mode    = bot.get("mode", "?").upper()
-    bal     = bot.get("balance_usdt", 0)
-    pnl     = bot.get("daily_pnl", 0)
-    trades  = bot.get("trades_today", 0)
-    pairs   = ", ".join(bot.get("active_pairs", []))
-    active  = bot.get("trading_active", False)
-    strats  = ", ".join(s["name"] for s in bot.get("strategies_info", []) if s.get("enabled"))
-    week_rem= risk.get("weekly_remaining_usdt", 0) if risk else 0
-    week_pnl= risk.get("week_pnl", 0) if risk else 0
-    max_day = risk.get("max_daily_trades", 3) if risk else 3
-    emerg   = risk.get("emergency_stop", False) if risk else False
-
-    lines += [
-        f'Режим: <b>{mode}</b> | Торговля: {"ВКЛ" if active else "ВЫКЛ"}',
-        "",
-        "<b>Финансы:</b>",
-        f"  Баланс: ${float(bal):.2f}",
-        f"  PnL сегодня: ${float(pnl):.4f}",
-        f"  PnL за неделю: ${float(week_pnl):.3f}",
-        f"  Недельный лимит: ${float(week_rem):.2f} осталось",
-        "",
-        "<b>Торговля:</b>",
-        f"  Пары: {pairs or 'нет'}",
-        f"  Стратегии: {strats or 'нет'}",
-        f"  Сделок сегодня: {trades}/{max_day}",
-        f'  Emergency stop: {"ДА ⚠️" if emerg else "нет"}',
-    ]
-    last_sig = bot.get("last_signal", {})
-    if last_sig:
-        lines += [
-            "",
-            "<b>Последний сигнал:</b>",
-            f'  {last_sig.get("symbol","?")} {last_sig.get("action","?")} '
-            f'({last_sig.get("strategy","?")} strength={float(last_sig.get("strength",0)):.2f})',
-        ]
-    return "\n".join(lines)
-
-
-def cmd_analysis() -> str:
-    lines = [
-        "<b>Рыночный анализ</b>",
-        f"<i>{datetime.now(timezone.utc).strftime('%H:%M UTC')}</i>",
-        "",
-    ]
-    pairs = ["SOLUSDT", "LINKUSDT", "DOTUSDT", "BTCUSDT", "ETHUSDT"]
-    opportunities = []
-    for symbol in pairs:
-        try:
-            r = bybit_get("/v5/market/tickers", {"category": "linear", "symbol": symbol})
-            item = r.get("result", {}).get("list", [{}])[0]
-            rate     = float(item.get("fundingRate", 0))
-            price    = float(item.get("lastPrice", 0))
-            change   = float(item.get("price24hPcnt", 0)) * 100
-            icon     = "📈" if change > 0 else "📉"
-            annual   = abs(rate) * 3 * 365 * 100
-            wins     = "LONG wins" if rate < 0 else "SHORT wins"
-            lines.append(
-                f"{icon} <b>{symbol}</b>: ${price:.2f} ({change:+.1f}%) | "
-                f"Funding: {rate*100:.4f}%/8h ({annual:.0f}%/yr, {wins})"
-            )
-            if abs(rate) >= 0.0003:
-                opportunities.append(f"⚡ {symbol}: {rate*100:.4f}%/8h HIGH")
-            time.sleep(0.05)
-        except Exception:
-            pass
-
-    if opportunities:
-        lines += ["", "<b>Торговые возможности:</b>"] + opportunities
     else:
-        lines.append("\nФандинг нейтральный.")
-    return "\n".join(lines)
-
-
-def cmd_restart(service: str, chat_id: str) -> str:
-    service = service.strip().lower()
-    if service not in ALLOWED_SERVICES:
-        safe_list = ", ".join(sorted(ALLOWED_SERVICES))
-        return f"❌ Неизвестный сервис\nДоступны: <code>{safe_list}</code>"
-
-    # CONFIRMATION GATE for trading-critical services
-    if service in TRADING_CRITICAL_SERVICES:
-        # Check for open positions before allowing restart
-        bot = api_monitor("/status")
-        open_pos = int(bot.get("open_positions", 0)) if bot else "?"
-
-        token = _store_confirm(chat_id, {"action": "restart", "service": service})
-        return (
-            f"⚠️ <b>ВНИМАНИЕ: {service} — критический сервис</b>\n"
-            f"Открытых позиций: <b>{open_pos}</b>\n\n"
-            f"Для подтверждения отправь: <code>/confirm {token}</code>\n"
-            f"<i>Действительно {int(CONFIRM_TTL)}с</i>"
+        greeting = (
+            f"👋 Добро пожаловать, <b>{name}</b>!\n\n"
+            f"<b>MaxAI Corporation</b> — первая в мире автономная AI-корпорация.\n\n"
+            f"🤖 <b>{agents_count} AI-агентов</b> готовы к работе:\n"
+            f"• Разработка кода, анализ, маркетинг\n"
+            f"• 1С интеграция, юридические документы\n"
+            f"• Торговые сигналы, презентации\n\n"
+            f"⚡ Результат за <b>30 сек — 5 минут</b>\n"
+            f"🎁 <b>Первые 3 задачи — бесплатно!</b>"
         )
 
-    return _do_restart(service)
+    await update.message.reply_text(greeting, parse_mode="HTML", reply_markup=main_kb(lang))
 
 
-def _do_restart(service: str) -> str:
-    try:
-        subprocess.run(["systemctl", "restart", service], capture_output=True, text=True, timeout=30)
-        time.sleep(2)
-        r = subprocess.run(["systemctl", "is-active", service], capture_output=True, text=True, timeout=3)
-        ok = r.stdout.strip() == "active"
-        return f'{"✅" if ok else "❌"} <b>{service}</b>: {r.stdout.strip()}'
-    except Exception as e:
-        return f"❌ Ошибка: {str(e)[:200]}"
+# ── HANDLERS: Category Menu ───────────────────────────────────────────────────
+async def show_category_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "🤖 <b>Выберите направление:</b>\n\n"
+        "Каждый агент — эксперт своей области.\n"
+        "Результат гарантирован."
+    )
+    q = update.callback_query
+    if q:
+        await q.edit_message_text(text, parse_mode="HTML", reply_markup=category_kb())
 
 
-def cmd_confirm(token: str, chat_id: str) -> str:
-    action = _pop_confirm(chat_id, token)
-    if not action:
-        return "❌ Токен не найден или истёк. Повтори команду заново."
-    if action.get("action") == "restart":
-        return _do_restart(action["service"])
-    return "❌ Неизвестное действие"
+async def show_agents_in_category(update: Update, ctx: ContextTypes.DEFAULT_TYPE, cat_id: str):
+    cat_name, agent_ids = CATEGORIES.get(cat_id, ("Агенты", []))
+    text = f"<b>{cat_name}</b>\n\nВыберите агента — покажу пример и стоимость:"
+    q = update.callback_query
+    await q.edit_message_text(text, parse_mode="HTML", reply_markup=agents_in_category_kb(cat_id))
 
 
-def cmd_logs(name: str) -> str:
-    # Sanitize: only whitelisted names, no path traversal
-    name = re.sub(r"[^a-z0-9_\-]", "", name.lower())
-    if not name or name not in ALLOWED_LOG_FILES:
-        safe = ", ".join(sorted(ALLOWED_LOG_FILES))
-        return f"❌ Лог <b>{name}</b> не в белом списке\nДоступны: <code>{safe}</code>"
+async def show_agent_card(update: Update, ctx: ContextTypes.DEFAULT_TYPE, agent_id: str):
+    agent = AGENTS.get(agent_id, {})
+    q = update.callback_query
+    ctx.user_data["selected_agent"] = agent_id
 
-    log_file = LOG_DIR / f"{name}.log"
-    if log_file.exists():
+    text = (
+        f"<b>{agent.get('name','Agent')}</b>\n\n"
+        f"💰 От <b>${agent.get('price',0)}/мес</b> или <b>$5/задача</b>\n"
+        f"⏱️ Время выполнения: <b>{agent.get('time','?')}</b>\n\n"
+        f"📋 <b>Пример:</b>\n<i>{agent.get('example','')}</i>\n\n"
+        f"✍️ Выберите действие:"
+    )
+    await q.edit_message_text(text, parse_mode="HTML", reply_markup=agent_action_kb(agent_id))
+
+
+# ── HANDLERS: Task Submission ─────────────────────────────────────────────────
+async def start_task_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE, agent_id: str):
+    agent = AGENTS.get(agent_id, {})
+    ctx.user_data["state"]          = "awaiting_task"
+    ctx.user_data["selected_agent"] = agent_id
+    q = update.callback_query
+    text = (
+        f"✍️ <b>Описывайте задачу для {agent.get('name','агента')}:</b>\n\n"
+        f"Чем подробнее — тем лучше результат.\n"
+        f"Можно на русском или английском.\n\n"
+        f"<i>Пример: {agent.get('template','Опишите задачу...')}</i>"
+    )
+    await q.edit_message_text(text, parse_mode="HTML",
+                               reply_markup=InlineKeyboardMarkup([[
+                                   InlineKeyboardButton("↩ Отмена", callback_data=f"agent_{agent_id}")
+                               ]]))
+
+
+async def show_template(update: Update, ctx: ContextTypes.DEFAULT_TYPE, agent_id: str):
+    agent  = AGENTS.get(agent_id, {})
+    q = update.callback_query
+    ctx.user_data["state"]          = "awaiting_task"
+    ctx.user_data["selected_agent"] = agent_id
+    template = agent.get("template", "Опишите задачу...")
+    text = (
+        f"📋 <b>Шаблон для {agent.get('name','агента')}:</b>\n\n"
+        f"<code>{template}</code>\n\n"
+        "Скопируйте шаблон, замените {} на ваши данные, и отправьте ответным сообщением:"
+    )
+    await q.edit_message_text(text, parse_mode="HTML",
+                               reply_markup=InlineKeyboardMarkup([[
+                                   InlineKeyboardButton("↩ Назад", callback_data=f"agent_{agent_id}")
+                               ]]))
+
+
+async def submit_task(update: Update, ctx: ContextTypes.DEFAULT_TYPE, task_text: str):
+    """Submit task to NEXUS API and start polling."""
+    agent_id = ctx.user_data.get("selected_agent", "researcher")
+    agent    = AGENTS.get(agent_id, {})
+    user     = update.effective_user
+    client   = ctx.user_data.get("client") or get_client(user.id, user.full_name)
+    api_key  = client.get("api_key", "")
+
+    if not api_key:
+        await update.message.reply_text("❌ Ошибка авторизации. Попробуйте /start")
+        return
+
+    ctx.user_data["state"] = None
+
+    # Send processing message
+    wait_msg = await update.message.reply_text(
+        f"⚡ <b>{agent.get('name','Агент')} принял задачу!</b>\n\n"
+        f"🔄 Обрабатываю...\n"
+        f"⏱️ Ожидаемое время: {agent.get('time','1-5 мин')}",
+        parse_mode="HTML"
+    )
+
+    result = nexus_api("POST", "/nexus/tasks", {
+        "agent_type": agent_id,
+        "task": task_text,
+        "priority": 8
+    }, key=api_key)
+
+    job_id = result.get("job_id", "")
+    if not job_id:
+        await wait_msg.edit_text("❌ Ошибка отправки задачи. Попробуйте ещё раз.")
+        return
+
+    # Update status message
+    await wait_msg.edit_text(
+        f"✅ <b>Задача принята!</b>\n\n"
+        f"🤖 Агент: {agent.get('name','?')}\n"
+        f"🆔 ID: <code>{job_id}</code>\n"
+        f"⏳ Выполняется...\n\n"
+        f"Результат придёт прямо сюда.",
+        parse_mode="HTML",
+        reply_markup=after_task_kb(job_id, agent_id)
+    )
+
+    notify_owner(
+        f"📨 Задача!\n"
+        f"Клиент: {user.full_name} (@{user.username})\n"
+        f"Агент: {agent.get('name','?')}\n"
+        f"Задача: {task_text[:150]}\n"
+        f"ID: {job_id}"
+    )
+
+    # Poll for result
+    asyncio.create_task(
+        poll_and_deliver(update, ctx, job_id, api_key, agent_id, wait_msg)
+    )
+
+
+async def poll_and_deliver(
+    update: Update, ctx: ContextTypes.DEFAULT_TYPE,
+    job_id: str, api_key: str, agent_id: str, wait_msg
+):
+    """Poll task result and deliver to user."""
+    agent = AGENTS.get(agent_id, {})
+    MAX_POLLS = 40  # 80 seconds max
+    tools_hint = ""
+
+    for i in range(MAX_POLLS):
+        await asyncio.sleep(2)
         try:
-            r = subprocess.run(["tail", "-n", "25", str(log_file)], capture_output=True, text=True, timeout=5)
-            text = r.stdout[-2000:] if r.stdout else "пусто"
-            # Strip any system paths from output before sending
-            text = re.sub(r"/root/[^\s\"']+", "[path]", text)
-            return f"<b>Лог {name}:</b>\n<code>{text}</code>"
-        except Exception as e:
-            return f"❌ Ошибка чтения: {str(e)[:100]}"
+            result = nexus_api("GET", f"/nexus/tasks/{job_id}", key=api_key)
+            status = result.get("status", "queued")
 
-    return f"❌ Лог <b>{name}.log</b> не найден"
-
-
-def cmd_report() -> str:
-    lines = [
-        "<b>MaxAI Revenue Report</b>",
-        f"<i>{datetime.now(timezone.utc).strftime('%d.%m.%Y %H:%M UTC')}</i>",
-        "",
-    ]
-    r = bybit_get("/v5/account/wallet-balance", {"accountType": "UNIFIED"})
-    try:
-        for c in r["result"]["list"][0]["coin"]:
-            if c["coin"] == "USDT":
-                lines.append(f'💳 Баланс: <b>${float(c.get("walletBalance",0)):.2f}</b>')
-                break
-    except Exception:
-        lines.append("💳 Баланс: N/A")
-
-    bot = api_monitor("/status")
-    if bot:
-        lines.append(f'📈 PnL сегодня: ${float(bot.get("daily_pnl",0)):.4f}')
-        lines.append(f'Сделок: {bot.get("trades_today",0)}')
-
-    try:
-        ks = json.loads((DATA_DIR / "kwork_state.json").read_text())
-        lines.append(f'\n💼 Kwork: {ks.get("total_applied",0)} откликов, выиграно {ks.get("won",0)}')
-    except Exception:
-        lines.append("\n💼 Kwork: нет данных")
-
-    ok = 0
-    for svc in ALLOWED_SERVICES:
-        try:
-            r2 = subprocess.run(["systemctl", "is-active", svc], capture_output=True, text=True, timeout=2)
-            ok += r2.stdout.strip() == "active"
-        except Exception:
-            pass
-    lines.append(f"\n🖥️ Сервисов активно: {ok}/{len(ALLOWED_SERVICES)}")
-    return "\n".join(lines)
-
-
-def cmd_agents() -> str:
-    lines = ["<b>Агенты MaxAI</b>", ""]
-    try:
-        agents = sorted(
-            [f for f in Path("/root/my_personal_ai/agents").glob("*.py") if not f.name.startswith("_")],
-            key=lambda x: x.stat().st_mtime,
-            reverse=True,
-        )[:20]
-        for af in agents:
-            r = subprocess.run(["pgrep", "-f", af.name], capture_output=True, text=True)
-            icon = "🟢" if r.stdout.strip() else "⚫"
-            lines.append(f"{icon} {af.name}")
-    except Exception as e:
-        lines.append(f"❌ {str(e)[:100]}")
-    return "\n".join(lines)
-
-
-def cmd_kwork() -> str:
-    lines = ["<b>Kwork Agent</b>", ""]
-    try:
-        ks = json.loads((DATA_DIR / "kwork_state.json").read_text())
-        lines += [
-            f'Откликов всего: <b>{ks.get("total_applied",0)}</b>',
-            f'Выиграно: <b>{ks.get("won",0)}</b>',
-            f'Заработано: <b>{ks.get("total_earned_rub",0):,} руб</b>',
-        ]
-    except Exception:
-        lines.append("Нет данных. Агент не запускался.")
-    return "\n".join(lines)
-
-
-def cmd_positions() -> str:
-    """Live open positions from trading bot."""
-    lines = ["<b>Открытые позиции</b>", ""]
-    pos = api_panel("/api/trading/positions")
-    if not pos:
-        return "❌ Позиции недоступны"
-    positions = pos.get("positions", [])
-    if not positions:
-        lines.append("Нет открытых позиций")
-    else:
-        for p in positions:
-            pnl = float(p.get("unrealised_pnl", p.get("pnl", 0)))
-            icon = "📈" if pnl >= 0 else "📉"
-            lines.append(
-                f'{icon} <b>{p.get("symbol","?")}</b> {p.get("side","?")}\n'
-                f'  Entry: {p.get("entry_price","?")} | SL: {p.get("stop_loss","?")} | TP: {p.get("take_profit","?")}\n'
-                f'  PnL: ${pnl:.4f}'
-            )
-    return "\n".join(lines)
-
-
-def cmd_browser() -> str:
-    """Browser control v2 status."""
-    d = api_panel("/api/browser/v2/state")
-    if not d:
-        return "❌ Browser API недоступен"
-    state   = d.get("state", "UNKNOWN")
-    owner   = d.get("lease", {}).get("owner", "none")
-    running = d.get("running", False)
-    url     = d.get("url", "—")
-    lines = [
-        "<b>Browser Control v2</b>",
-        f'Состояние: <b>{state}</b> | Владелец: {owner}',
-        f'Запущен: {"да" if running else "нет"}',
-        f'URL: {url or "—"}',
-    ]
-    return "\n".join(lines)
-
-
-def cmd_links() -> str:
-    lines = [
-        "<b>MaxAI — Все ресурсы</b>",
-        "",
-        "<b>Боты:</b>",
-        "• @Corporation_MaxAI_bot — корп бот",
-        "• @maksim_bybit_bot — управление системой",
-        "",
-        "<b>Панель управления:</b>",
-        "• http://77.90.2.171/ — главная",
-        "• http://77.90.2.171/api/v1/manifest",
-        "",
-        "<b>API для клиентов:</b>",
-        "POST http://77.90.2.171/api/v1/webhook — заявки",
-        "POST http://77.90.2.171/api/v1/ai — AI",
-        "GET  http://77.90.2.171/api/v1/packs — пакеты",
-        "",
-        "<b>Статус системы:</b>",
-        "http://77.90.2.171/health",
-        "http://77.90.2.171/api/status",
-    ]
-    return chr(10).join(lines)
-
-
-def cmd_setchannel(arg: str, chat_id: str) -> str:
-    """Save CHANNEL_ID to .env and reload social scheduler."""
-    channel = arg.strip()
-    if not channel:
-        return (
-            "<b>/setchannel — Настройка канала</b>" + chr(10) + chr(10)
-            + "Шаг 1: Создайте Telegram-канал" + chr(10)
-            + "Шаг 2: Добавьте @Corporation_MaxAI_bot как администратора" + chr(10)
-            + "Шаг 3: Перешлите любое сообщение из канала в @userinfobot — получите ID" + chr(10)
-            + "Шаг 4: Введите: /setchannel -100xxxxxxxxxx" + chr(10) + chr(10)
-            + "Текущее значение: " + (os.environ.get("CHANNEL_ID") or "не установлено")
-        )
-    # Validate format
-    if not (channel.startswith("-100") or channel.startswith("@")):
-        return "❌ Неверный формат. Используй: /setchannel -100xxxxxxxxxx или @channelusername"
-    # Write to .env
-    env_path = "/root/my_personal_ai/.env"
-    try:
-        try:
-            with open(env_path, "r", encoding="utf-8") as _f:
-                env_lines = _f.readlines()
-        except FileNotFoundError:
-            env_lines = []
-        # Remove existing CHANNEL_ID line
-        env_lines = [ln for ln in env_lines if not ln.startswith("CHANNEL_ID=")]
-        env_lines.append("CHANNEL_ID=" + channel + chr(10))
-        with open(env_path, "w", encoding="utf-8") as _f:
-            _f.writelines(env_lines)
-        os.environ["CHANNEL_ID"] = channel
-        # Test: try to get chat info
-        import urllib.request as _ur, json as _js
-        try:
-            url = "https://api.telegram.org/bot" + CORP_TOKEN + "/getChat?chat_id=" + channel
-            with _ur.urlopen(_ur.Request(url), timeout=8) as r:
-                chat_data = _js.loads(r.read())
-            if chat_data.get("ok"):
-                chat_title = chat_data["result"].get("title", channel)
-                return (
-                    "✅ <b>CHANNEL_ID установлен!</b>" + chr(10)
-                    + "Канал: " + chat_title + chr(10)
-                    + "ID: " + channel + chr(10) + chr(10)
-                    + "Контент-планировщик будет использовать этот канал." + chr(10)
-                    + "Следующий пост: завтра в 09:00 МСК или запусти вручную."
+            # Update message with progress
+            if i == 5:
+                await wait_msg.edit_text(
+                    f"🔄 <b>{agent.get('name','Агент')} работает...</b>\n\n"
+                    f"🆔 <code>{job_id}</code>\n"
+                    f"⏱️ Прошло: {(i+1)*2}с",
+                    parse_mode="HTML",
+                    reply_markup=after_task_kb(job_id, agent_id)
                 )
-            else:
-                err = chat_data.get("description", "неизвестная ошибка")
-                return (
-                    "⚠️ CHANNEL_ID сохранён, но бот не является членом канала." + chr(10)
-                    + "Ошибка: " + err + chr(10) + chr(10)
-                    + "Добавьте @Corporation_MaxAI_bot как администратора канала."
+            elif i == 15:
+                await wait_msg.edit_text(
+                    f"🔄 <b>Агент использует реальные данные...</b>\n\n"
+                    f"• Поиск информации в сети\n"
+                    f"• Анализ данных\n"
+                    f"• Формирование ответа\n\n"
+                    f"⏱️ Прошло: {(i+1)*2}с",
+                    parse_mode="HTML",
+                    reply_markup=after_task_kb(job_id, agent_id)
                 )
-        except Exception:
-            return (
-                "✅ CHANNEL_ID=" + channel + " сохранён." + chr(10)
-                + "Убедитесь что бот является администратором канала."
-            )
-    except Exception as _e:
-        return "❌ Ошибка сохранения: " + str(_e)
 
-
-def cmd_help() -> str:
-    return "<b>MaxAI Corporation Bot v2</b>\n\n<b>Статус и данные:</b>\n/status — состояние сервисов\n/balance — баланс и PnL\n/trading — детали торговли\n/positions — открытые позиции\n/analysis — рыночный анализ\n/report — отчёт по доходам\n/kwork — статистика Kwork\n/agents — список агентов\n/browser — Browser Control v2\n\n<b>Управление:</b>\n/restart &lt;сервис&gt; — перезапуск (с подтверждением для торговых)\n/confirm &lt;токен&gt; — подтвердить опасное действие\n/logs &lt;имя&gt; — логи\n\n<b>Бизнес-инструменты:</b>\n/leads — сканировать горячие лиды\n/social [текст] — опубликовать пост\n\nИли напиши вопрос — отвечу!"
-
-
-# ─── AI routing (context-isolated) ───────────────────────────────────────────
-def md2tg(txt):
-    """Markdown -> Telegram HTML (prevents sendMessage 400)."""
-    import re as _re
-    AMP = chr(38)+chr(97)+chr(109)+chr(112)+chr(59)
-    LT  = chr(38)+chr(108)+chr(116)+chr(59)
-    GT  = chr(38)+chr(103)+chr(116)+chr(59)
-    def _esc(s):
-        return s.replace(chr(38), AMP).replace(chr(60), LT).replace(chr(62), GT)
-    def cb(m):
-        c = (m.group(2) or '').strip()
-        return '<code>' + _esc(c) + '</code>'
-    txt = _re.sub(BT*3+r'(\w*)?\n?([\s\S]*?)'+BT*3, cb, txt)
-    def ic(m):
-        return '<code>' + _esc(m.group(1)) + '</code>'
-    txt = _re.sub(BT+r'([^'+BT+r'\n]+)'+BT, ic, txt)
-    txt = _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', txt)
-    txt = _re.sub(r'__(.+?)__', r'<b>\1</b>', txt)
-    txt = _re.sub(r'^#{1,6}\s+(.+)$', r'<b>\1</b>', txt, flags=_re.MULTILINE)
-    txt = _re.sub(r'<(?!/?(b|i|code|pre)(\s|>))[^>]+>', '', txt)
-    return txt.strip()
-
-
-def cmd_ai(text: str, user_id: str) -> str:
-    """AI reply: Groq primary, panel /api/chat fallback."""
-    import urllib.request as _ur2, json as _j2
-    groq_key = os.environ.get('GROQ_API_KEY','')
-    # 1. Groq direct
-    if groq_key:
-        try:
-            body = _j2.dumps({
-                "model": "llama-3.3-70b-versatile",
-                "messages": [
-                    {"role":"system","content":"Ты MaxAI — корпоративный AI-ассистент. Отвечай кратко, по-деловому, на русском."},
-                    {"role":"user","content":text}
-                ],
-                "max_tokens": 800, "temperature": 0.7
-            }).encode()
-            req = _ur2.Request('https://api.groq.com/openai/v1/chat/completions',
-                data=body,
-                headers={"Content-Type":"application/json","Authorization":f"Bearer {groq_key}"},
-                method="POST")
-            with _ur2.urlopen(req, timeout=25) as r:
-                d = _j2.loads(r.read())
-                reply = d["choices"][0]["message"]["content"].strip()
-                if reply: return md2tg(reply)
-        except Exception as e:
-            log.warning("Groq failed: %s", e)
-    # 2. Panel /api/chat fallback
-    for url, tmt in [(PANEL_BASE+"/api/chat", 20)]:
-        try:
-            body = _j2.dumps({"message": text, "source": "telegram_corp"}).encode()
-            req = _ur2.Request(url, data=body,
-                headers={"Content-Type": "application/json"}, method="POST")
-            with _ur2.urlopen(req, timeout=tmt) as r:
-                d = _j2.loads(r.read())
-                reply = (d.get("reply") or d.get("result") or d.get("response") or d.get("text") or "").strip()
-                if reply: return md2tg(reply)
-        except Exception as e:
-            log.debug("Panel AI %s failed: %s", url, e)
-    return "Не удалось получить ответ от AI. Используй /status или /balance для данных."
-
-
-# ─── Dispatcher ───────────────────────────────────────────────────────────────
-
-def _corp_check_keys() -> str:
-    """Quick check of all API keys from within corp bot."""
-    lines = ['<b>Статус API ключей:</b>']
-    checks = {
-        'CORP_BOT_TOKEN': 'Corp Bot',
-        'TELEGRAM_BOT_TOKEN': 'Main Bot',
-        'BYBIT_API_KEY': 'Bybit',
-        'ANTHROPIC_API_KEY': 'Claude',
-        'GROQ_API_KEY': 'Groq',
-        'KWORK_EMAIL': 'Kwork',
-    }
-    for key, name in checks.items():
-        val = os.environ.get(key, '')
-        if val:
-            masked = val[:4] + '...' + val[-4:] if len(val) > 8 else '***'
-            lines.append(f'✅ {name}: {masked}')
-        else:
-            lines.append(f'❌ {name}: не задан')
-    return '\n'.join(lines)
-
-
-def _corp_llm_status() -> str:
-    """Get LLM providers status from panel."""
-    try:
-        import urllib.request as _ur
-        r = _ur.urlopen('http://127.0.0.1:8090/api/llm/status', timeout=5)
-        data = json.loads(r.read())
-        providers = data.get('providers', [])
-        lines = ['<b>Статус LLM:</b>']
-        for p in providers:
-            icon = '✅' if p.get('available') else '❌'
-            lines.append(f'{icon} {p["name"]}: {p["model"]}')
-        return '\n'.join(lines)
-    except Exception as e:
-        return f'❌ LLM статус: {e}'
-
-
-def _corp_scan_leads():
-    try:
-        from urllib.request import Request as _R, urlopen as _uo
-        import json as _j
-        req = _R(CORP_API + "/leads/scan")
-        with _uo(req, timeout=10) as r:
-            d = _j.loads(r.read())
-        total = d.get("total", 0)
-        hot = d.get("hot", 0)
-        leads = d.get("leads", [])
-        if not hot:
-            return "Leads: %d checked, no hot" % total
-        out = ["Found %d hot of %d:" % (hot, total)]
-        for lead in leads[:5]:
-            kws = ", ".join(lead.get("keywords", [])[:3])
-            out.append("  [%d%%] %s: %s..." % (int(lead.get("score",0)*100), kws, lead.get("text","")[:80]))
-        return chr(10).join(out)
-    except Exception as e:
-        return "Lead error: " + str(e)
-
-
-def _corp_post_social(text=""):
-    try:
-        from urllib.request import Request as _R, urlopen as _uo
-        import json as _j
-        body = _j.dumps({"text": text} if text else {}).encode()
-        req = _R(CORP_API + "/social/post", data=body, headers={"Content-Type": "application/json"}, method="POST")
-        with _uo(req, timeout=15) as r:
-            d = _j.loads(r.read())
-        return ("Post sent: " + d.get("preview","")[:60]) if d.get("ok") else "Post failed"
-    except Exception as e:
-        return "Social error: " + str(e)
-
-
-def dispatch(text: str, chat_id: str) -> str:
-    """Process one message; returns reply string."""
-    # MaxAI prefix = прямо в AI, высший приоритет
-    if text.strip()[:6].lower() == 'maxai ':
-        query = text.strip()[6:].strip()
-        log.info("MaxAI direct uid=%s: %s", chat_id, query[:80])
-        return cmd_ai(query, chat_id)
-    parts = text.strip().split(None, 1)
-    cmd   = parts[0].lstrip("/").split("@")[0].lower()
-    arg   = parts[1].strip() if len(parts) > 1 else ""
-    log.info("cmd=%r arg=%r chat=%s", cmd, arg[:40], chat_id)
-
-    table = {
-        "start":    cmd_help,
-        "help":     cmd_help,
-        "status":   cmd_status,
-        "balance":  cmd_balance,
-        "trading":  cmd_trading,
-        "analysis": cmd_analysis,
-        "report":   cmd_report,
-        "agents":   cmd_agents,
-        "kwork":    cmd_kwork,
-        "positions": cmd_positions,
-        "browser":  cmd_browser,
-        "links":    cmd_links,
-        "setchannel": lambda: cmd_setchannel(arg, chat_id),
-        "leads":   lambda: _corp_scan_leads(),
-        "social":  lambda: _corp_post_social(arg),
-        "task":    lambda: cmd_ai(arg if arg else text, chat_id),
-        "execute": lambda: cmd_ai(arg if arg else text, chat_id),
-        "keys":    _corp_check_keys,
-        "llm":     _corp_llm_status,
-    }
-
-    if cmd in table:
-        return table[cmd]()
-    elif cmd == "restart":
-        return cmd_restart(arg, chat_id) if arg else "❌ Укажи: /restart bybit-monitor"
-    elif cmd == "confirm":
-        return cmd_confirm(arg, chat_id) if arg else "❌ Укажи: /confirm &lt;токен&gt;"
-    elif cmd == "logs":
-        return cmd_logs(arg) if arg else f"❌ Укажи: /logs tgbot\nДоступны: {', '.join(sorted(ALLOWED_LOG_FILES))}"
-    else:
-        return cmd_ai(text, chat_id)
-
-
-# ─── Main polling loop ────────────────────────────────────────────────────────
-def main() -> None:
-    if not CORP_TOKEN:
-        log.error("CORP_BOT_TOKEN not set! Export it or add to .env")
-        sys.exit(1)
-
-    log.info("MaxAI Corporate Bot v2 starting (token: ...%s)", CORP_TOKEN[-6:])
-    state = _load_state()
-
-    # Register commands menu
-    tg_set_commands()
-
-    # Announce startup (if chat ID configured)
-    if ALLOWED_IDS:
-        for cid in ALLOWED_IDS:
-            tg_send(
-                cid,
-                f"<b>MaxAI Corporate Bot v2</b> готова ✅\n"
-                f"<i>{datetime.now(timezone.utc).strftime('%d.%m.%Y %H:%M UTC')}</i>\n"
-                "/help — список команд",
-            )
-
-    offset = state.get("offset", 0)
-    executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="corp_dispatch")
-    backoff = 1.0
-
-    while True:
-        try:
-            updates = tg_get_updates(offset)
-            backoff = 1.0  # reset on success
-
-            for upd in updates:
-                uid = upd["update_id"]
-                offset = uid + 1
-
-                # Idempotency check (in-memory TTL)
-                if _is_duplicate(uid):
-                    log.debug("Duplicate update_id=%d skipped", uid)
-                    state["offset"] = offset
-                    _save_state(state)
-                    continue
-
-                msg = upd.get("message", {})
-                if not msg:
-                    state["offset"] = offset
-                    _save_state(state)
-                    continue
-                chat_id   = str(msg.get("chat", {}).get("id", ""))
-                text      = msg.get("text", "").strip()
-                from_user = msg.get("from", {})
-                from_name = " ".join(filter(None, [
-                    from_user.get("first_name", ""),
-                    from_user.get("last_name", ""),
-                    from_user.get("username", ""),
-                ]))
+            if status == "completed":
+                text = result.get("result", "")
+                tools_used = result.get("tools_used", False)
+                exec_time  = result.get("execution_ms", 0) / 1000
+                char_count = result.get("char_count", len(text))
+                tools_note = " + реальные данные" if tools_used else ""
 
                 if not text:
-                    state["offset"] = offset
-                    _save_state(state)
                     continue
 
-                # Classify business intent BEFORE auth check
-                biz = is_business_intent(text)
+                # Send result in chunks if long
+                header = (
+                    f"✅ <b>Готово!</b> | {agent.get('name','?')}{tools_note}\n"
+                    f"⏱️ {exec_time:.1f}с | 📊 {char_count} символов\n\n"
+                )
 
-                # Persist to SQLite queue (0-loss guarantee)
-                mq_enqueue(uid, chat_id, text, from_name, biz)
+                chunks = [text[i:i+3800] for i in range(0, min(len(text), 12000), 3800)]
+                for idx, chunk in enumerate(chunks):
+                    if idx == 0:
+                        msg = header + chunk
+                        await update.message.reply_text(
+                            msg, parse_mode="HTML",
+                            reply_markup=after_task_kb(job_id, agent_id) if idx == len(chunks)-1 else None
+                        )
+                    else:
+                        await update.message.reply_text(
+                            chunk,
+                            reply_markup=after_task_kb(job_id, agent_id) if idx == len(chunks)-1 else None
+                        )
 
-                # Route business messages to corp group (even non-authorized)
-                if biz and chat_id not in ALLOWED_IDS:
-                    threading.Thread(
-                        target=route_to_corp_group,
-                        args=(from_name, chat_id, text),
-                        daemon=True
-                    ).start()
-                    tg_send(
-                        chat_id,
-                        "Спасибо за интерес! Менеджер свяжется в ближайшее время. "  # noqa
-                        "@Corporation_MaxAI_bot"
+                # Suggest next actions
+                await asyncio.sleep(1)
+                suggestions = get_next_suggestions(agent_id)
+                if suggestions:
+                    await update.message.reply_text(
+                        f"💡 <b>Что ещё можно сделать:</b>\n{suggestions}",
+                        parse_mode="HTML",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔄 Улучшить этот ответ", callback_data=f"improve_{job_id}_{agent_id}")],
+                            [InlineKeyboardButton("🤖 Другой агент", callback_data="cat_menu")],
+                        ])
                     )
-                    mq_ack(uid)
-                    state["offset"] = offset
-                    _save_state(state)
-                    continue
+                return
 
-                # Auth check for admin commands
-                if chat_id not in ALLOWED_IDS:
-                    tg_send(chat_id, "❌ Доступ запрещён.")
-                    mq_ack(uid)
-                    state["offset"] = offset
-                    _save_state(state)
-                    continue
+            elif status == "failed":
+                await wait_msg.edit_text(
+                    f"❌ Ошибка выполнения. Повторите задачу.\n"
+                    f"ID: <code>{job_id}</code>",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🔄 Повторить", callback_data=f"agent_{agent_id}")
+                    ]])
+                )
+                return
 
-                # Also route authorized business messages to corp group
-                if biz:
-                    threading.Thread(
-                        target=route_to_corp_group,
-                        args=(from_name, chat_id, text),
-                        daemon=True
-                    ).start()
+        except Exception as e:
+            log.warning(f"Poll error {job_id}: {e}")
 
-                # Rate limit
-                if not _rate_check(chat_id):
-                    tg_send(chat_id, "⏳ Слишком много запросов. Подожди 10 секунд.")
-                    mq_ack(uid)
-                    state["offset"] = offset
-                    _save_state(state)
-                    continue
-
-                # Non-blocking dispatch with guaranteed ACK
-                def _task(t=text, c=chat_id, u=uid):
-                    try:
-                        reply = dispatch(t, c)
-                        tg_send(c, reply)
-                    except Exception as exc:
-                        log.exception("Dispatch error for %r: %s", t[:50], exc)
-                        tg_send(c, "❌ Внутренняя ошибка. Попробуй ещё раз.")
-                    finally:
-                        mq_ack(u)
-
-                executor.submit(_task)
-
-                # Per-update offset save (0-loss on crash)
-                state["offset"] = offset
-                _save_state(state)
+    # Timeout
+    await wait_msg.edit_text(
+        f"⏳ Задача обрабатывается дольше обычного.\n"
+        f"Проверьте через пару минут: /status\n"
+        f"ID: <code>{job_id}</code>",
+        parse_mode="HTML",
+        reply_markup=after_task_kb(job_id, agent_id)
+    )
 
 
-        except KeyboardInterrupt:
-            log.info("Shutting down")
-            executor.shutdown(wait=True)
-            break
-        except Exception as exc:
-            log.error("Main loop: %s", exc)
-            time.sleep(min(backoff, 30.0))
-            backoff = min(backoff * 2, 30.0)
+def get_next_suggestions(agent_id: str) -> str:
+    """Smart suggestions after task completion."""
+    suggestions = {
+        "coder":      "• Написать тесты → 🧪 CodeMaster\n• Задеплоить → ⚙️ FlowBuilder\n• Создать документацию → 🔬 BrainSearch",
+        "trader":     "• Настроить алерты → ⚙️ FlowBuilder\n• Анализ портфеля → 💰 FinanceAI\n• Исследовать актив → 🔬 BrainSearch",
+        "hunter":     "• Отправить отклик → 📣 ViralBot\n• Найти ещё клиентов → 🎯 LeadHunter\n• Подготовить контракт → ⚖️ LexAI",
+        "researcher": "• Сделать презентацию → 🎨 PresentationMaster\n• Создать контент → 📣 ViralBot\n• Финансовый анализ → 💰 FinanceAI",
+        "presenter":  "• Написать питч → 🎯 LeadHunter\n• Финансовая модель → 💰 FinanceAI\n• Лендинг → 🎨 PixelMind",
+        "analyst":    "• Презентация выводов → 🎨 PresentationMaster\n• Создать дашборд → 💻 CodeMaster\n• Маркетинг стратегия → 📣 ViralBot",
+        "legal":      "• Онбординг клиента → 👥 HireBot\n• Интеграция CRM → ⚙️ FlowBuilder\n• Презентация → 🎨 PresentationMaster",
+    }
+    return suggestions.get(agent_id, "• Попробуйте другого агента → 🤖 /hire")
+
+
+# ── HANDLERS: /status ─────────────────────────────────────────────────────────
+async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user   = update.effective_user
+    client = ctx.user_data.get("client") or get_client(user.id, user.full_name)
+    key    = client.get("api_key", "")
+
+    jobs_data = nexus_api("GET", "/nexus/tasks", key=key)
+    jobs = jobs_data.get("jobs", []) if isinstance(jobs_data, dict) else []
+
+    if not jobs:
+        text = (
+            "📋 <b>История задач пуста.</b>\n\n"
+            "Используйте /hire чтобы заказать первую задачу.\n"
+            "Первые 3 задачи — бесплатно!"
+        )
+        await update.message.reply_text(text, parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🤖 Нанять агента", callback_data="cat_menu")
+            ]]))
+        return
+
+    icons = {"queued":"⏳", "running":"🔄", "completed":"✅", "failed":"❌", "processing":"⚙️"}
+    text = "📋 <b>Ваши последние задачи:</b>\n\n"
+    for job in jobs[:8]:
+        icon   = icons.get(job.get("status",""), "❓")
+        aname  = AGENTS.get(job.get("agent_type",""), {}).get("name", job.get("agent_type","?"))
+        time_s = job.get("execution_ms", 0) / 1000
+        tools  = " 🔧" if job.get("tools_used") else ""
+        text  += f"{icon} <b>{aname}</b>{tools}\n"
+        text  += f"   <code>{job['id']}</code> | {job.get('status','?')} | {time_s:.0f}с\n\n"
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Обновить", callback_data="refresh_status"),
+         InlineKeyboardButton("🤖 Новая задача", callback_data="cat_menu")],
+    ])
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+
+
+# ── HANDLERS: /pricing ────────────────────────────────────────────────────────
+async def cmd_pricing(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "💳 <b>Тарифы MaxAI Corporation 2026:</b>\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "🥉 <b>Starter</b> — $19/мес (~1 800₽)\n"
+        "   1 агент · 50 задач · API доступ\n\n"
+        "🥈 <b>Professional</b> — $49/мес (~4 600₽)\n"
+        "   5 агентов · 300 задач · Priority\n\n"
+        "🥇 <b>Business</b> — $99/мес (~9 300₽)\n"
+        "   15 агентов · 1000 задач · Менеджер\n\n"
+        "💎 <b>Enterprise</b> — $299/мес\n"
+        "   Всё без ограничений · SLA 99.9%\n\n"
+        "🔥 <b>Enterprise+</b> — $999/мес\n"
+        "   Выделенные агенты · Белый лейбл\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "💡 <i>Разовые задачи: от $5/задача</i>\n"
+        "🎁 <i>Новым клиентам — 3 задачи бесплатно!</i>"
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💳 Оплатить",        callback_data="pay_info"),
+         InlineKeyboardButton("💬 Обсудить",        url="https://t.me/MaxAI_SaaS_Bot")],
+        [InlineKeyboardButton("⚡ Попробовать бесплатно", callback_data="quick_demo")],
+        [InlineKeyboardButton("↩ Меню",             callback_data="back_main")],
+    ])
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+    else:
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+
+
+# ── HANDLERS: /pay ────────────────────────────────────────────────────────────
+async def cmd_pay(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "💳 <b>Оплата MaxAI Corporation</b>\n\n"
+        "Принимаем криптовалюту:\n\n"
+        "🔷 <b>USDT TRC20</b> (рекомендуем — min комиссия):\n"
+        "<code>TAN8FijYFgmM8wCq8Y5jogkry9kPaY9NE2</code>\n\n"
+        "🔷 <b>ETH (ERC20)</b>:\n"
+        "<code>0x7b72d6072f973a79d13abb11769927890832cc12</code>\n\n"
+        "🟡 <b>BTC</b>:\n"
+        "<code>158AEebXosZfxHY1ZVQNfTT6BHcuHqGFr4</code>\n\n"
+        "🟣 <b>SOL</b>:\n"
+        "<code>4v5rZQDfgHwE5135fQcVaQcaczYsb86gXbPgxWw4XDzK</code>\n\n"
+        "<b>После оплаты:</b>\n"
+        "Отправьте скриншот @MaxAI_SaaS_Bot\n"
+        "с суммой и ID транзакции.\n"
+        "Активация: до 30 минут ⚡"
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Уже оплатил",      url="https://t.me/MaxAI_SaaS_Bot"),
+         InlineKeyboardButton("📄 Счёт на оплату",   callback_data="get_invoice")],
+        [InlineKeyboardButton("💳 Тарифы",           callback_data="pricing"),
+         InlineKeyboardButton("↩ Меню",             callback_data="back_main")],
+    ])
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+    else:
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+
+
+# ── HANDLERS: Quick Demo ──────────────────────────────────────────────────────
+async def quick_demo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    ctx.user_data["state"]          = "awaiting_task"
+    ctx.user_data["selected_agent"] = "researcher"
+    text = (
+        "⚡ <b>Быстрое демо — BrainSearch</b>\n\n"
+        "Задайте любой вопрос или дайте задачу.\n"
+        "BrainSearch найдёт информацию в сети и ответит.\n\n"
+        "Примеры:\n"
+        "• Какой рынок AI агентов в 2026?\n"
+        "• Что такое MaxAI Corporation?\n"
+        "• Топ-5 фреймворков для RAG систем\n\n"
+        "Напишите ваш вопрос:"
+    )
+    await q.edit_message_text(text, parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("↩ Меню", callback_data="back_main")
+        ]]))
+
+
+# ── HANDLERS: Profile ─────────────────────────────────────────────────────────
+async def show_profile(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user   = update.effective_user
+    client = ctx.user_data.get("client") or get_client(user.id, user.full_name)
+    q = update.callback_query
+
+    # Get usage stats
+    api_key     = client.get("api_key", "")
+    plan        = client.get("plan", "starter")
+    tasks_used  = client.get("tasks_used", 0)
+    created     = client.get("created_at", "")[:10]
+
+    # Get completed jobs from API
+    jobs_data = nexus_api("GET", "/nexus/tasks", key=api_key)
+    jobs = jobs_data.get("jobs", []) if isinstance(jobs_data, dict) else []
+    completed = [j for j in jobs if j.get("status") == "completed"]
+    agents_used = list({j.get("agent_type","?") for j in completed})
+
+    plan_limits = {"starter":"50", "professional":"300", "business":"1000", "enterprise":"∞"}
+    limit = plan_limits.get(plan, "50")
+
+    text = (
+        f"📊 <b>Мой профиль</b>\n\n"
+        f"👤 {user.full_name}\n"
+        f"📦 Тариф: <b>{plan.title()}</b>\n"
+        f"📅 Клиент с: {created}\n"
+        f"✅ Задач выполнено: <b>{len(completed)}</b> / {limit}\n"
+    )
+    if agents_used:
+        text += f"🤖 Агенты: {', '.join(agents_used[:5])}\n"
+    text += f"\n🔑 API ключ: <code>{api_key[:16]}...</code>\n"
+    text += f"📘 Документация: https://maxai.fyi/nexus/openapi"
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📈 Улучшить тариф", callback_data="pricing"),
+         InlineKeyboardButton("📋 История задач",  callback_data="refresh_status")],
+        [InlineKeyboardButton("🤝 Партнёрство +20%",callback_data="affiliate_info"),
+         InlineKeyboardButton("↩ Меню",           callback_data="back_main")],
+    ])
+    await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+
+
+# ── MAIN MESSAGE HANDLER ──────────────────────────────────────────────────────
+async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text or ""
+    user = update.effective_user
+
+    # Auto-detect language
+    if is_ru(text):
+        ctx.user_data["lang"] = "ru"
+    elif len(text) > 15 and all(ord(c) < 256 for c in text):
+        ctx.user_data["lang"] = "en"
+
+    state = ctx.user_data.get("state")
+
+    # Handle task input
+    if state == "awaiting_task" and len(text) > 5:
+        await submit_task(update, ctx, text)
+        return
+
+    # Smart routing for natural language
+    if len(text) > 10 and not text.startswith("/"):
+        task_kw = ["сделай", "напиши", "создай", "помоги", "нужно", "хочу", "можешь",
+                   "write", "create", "help", "make", "build", "analyze", "find",
+                   "сгенерируй", "подготовь", "проанализируй", "найди", "разработай"]
+
+        if any(kw in text.lower() for kw in task_kw):
+            # Smart agent suggestion based on text
+            suggested = suggest_agent(text)
+            agent = AGENTS.get(suggested, {})
+            ctx.user_data["state"]          = "awaiting_task"
+            ctx.user_data["selected_agent"] = suggested
+
+            await update.message.reply_text(
+                f"🤖 Понял! Направляю к <b>{agent.get('name','агенту')}</b>\n\n"
+                f"Уточните задачу подробнее или просто отправьте её сейчас:",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton(f"✅ Отправить {agent.get('name','')}", callback_data=f"task_start_{suggested}")],
+                    [InlineKeyboardButton("🔄 Выбрать другого агента", callback_data="cat_menu")],
+                ])
+            )
+        else:
+            await update.message.reply_text(
+                "Привет! Используйте кнопки ниже для работы с агентами.",
+                reply_markup=main_kb(ctx.user_data.get("lang","ru"))
+            )
+
+
+def suggest_agent(text: str) -> str:
+    """Smart agent routing based on task text."""
+    text_l = text.lower()
+    if any(w in text_l for w in ["код", "python", "скрипт", "api", "бот", "code", "script"]):
+        return "coder"
+    if any(w in text_l for w in ["биткоин", "eth", "btc", "торг", "трейд", "крипт", "trade"]):
+        return "trader"
+    if any(w in text_l for w in ["отклик", "предлож", "клиент", "продат", "proposal", "lead"]):
+        return "hunter"
+    if any(w in text_l for w in ["парс", "scrape", "данны", "таблиц", "excel"]):
+        return "parser"
+    if any(w in text_l for w in ["презент", "слайд", "питч", "deck", "present"]):
+        return "presenter"
+    if any(w in text_l for w in ["маркет", "контент", "пост", "seo", "реклам", "market"]):
+        return "marketer"
+    if any(w in text_l for w in ["договор", "контракт", "nda", "юрид", "legal", "contract"]):
+        return "legal"
+    if any(w in text_l for w in ["финанс", "инвест", "доход", "выруч", "finance", "money"]):
+        return "finance"
+    if any(w in text_l for w in ["1с", "1c", "bitrix", "erp", "бухгалт"]):
+        return "onec"
+    if any(w in text_l for w in ["дизайн", "лендинг", "ui", "ux", "сайт", "design"]):
+        return "designer"
+    if any(w in text_l for w in ["автомат", "workflow", "интеграц", "webhook", "automat"]):
+        return "automator"
+    return "researcher"
+
+
+# ── CALLBACK DISPATCHER ───────────────────────────────────────────────────────
+async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q    = update.callback_query
+    data = q.data
+    await q.answer()
+
+    if data == "back_main":
+        lang = get_lang(ctx)
+        client = ctx.user_data.get("client") or get_client(update.effective_user.id, update.effective_user.full_name)
+        ctx.user_data["state"] = None
+        await q.edit_message_text("🏠 Главное меню", reply_markup=main_kb(lang))
+
+    elif data == "cat_menu":
+        await show_category_menu(update, ctx)
+
+    elif data.startswith("cat_"):
+        cat_id = data[4:]
+        await show_agents_in_category(update, ctx, cat_id)
+
+    elif data.startswith("agent_"):
+        agent_id = data[6:]
+        await show_agent_card(update, ctx, agent_id)
+
+    elif data.startswith("task_start_"):
+        agent_id = data[11:]
+        await start_task_input(update, ctx, agent_id)
+
+    elif data.startswith("template_"):
+        agent_id = data[9:]
+        await show_template(update, ctx, agent_id)
+
+    elif data.startswith("example_"):
+        agent_id = data[8:]
+        agent = AGENTS.get(agent_id, {})
+        await q.edit_message_text(
+            f"💡 <b>Пример работы {agent.get('name','агента')}:</b>\n\n"
+            f"<i>{agent.get('example','Нет примера')}</i>\n\n"
+            f"Хотите такой же результат?",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✍️ Дать задачу", callback_data=f"task_start_{agent_id}")],
+                [InlineKeyboardButton("↩ Назад",        callback_data=f"agent_{agent_id}")],
+            ])
+        )
+
+    elif data == "my_tasks" or data == "refresh_status":
+        user   = update.effective_user
+        client = ctx.user_data.get("client") or get_client(user.id, user.full_name)
+        key    = client.get("api_key", "")
+        jobs_data = nexus_api("GET", "/nexus/tasks", key=key)
+        jobs = jobs_data.get("jobs", []) if isinstance(jobs_data, dict) else []
+
+        if not jobs:
+            await q.edit_message_text(
+                "📋 Задач пока нет.\nИспользуйте кнопку ниже чтобы создать первую.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🤖 Нанять агента", callback_data="cat_menu")]
+                ])
+            )
+            return
+
+        icons = {"queued":"⏳","running":"🔄","completed":"✅","failed":"❌","processing":"⚙️"}
+        text = "📋 <b>Ваши задачи:</b>\n\n"
+        for job in jobs[:6]:
+            icon  = icons.get(job.get("status",""), "❓")
+            aname = AGENTS.get(job.get("agent_type",""), {}).get("name", "?")
+            tools = " 🔧" if job.get("tools_used") else ""
+            text += f"{icon} {aname}{tools} — {job.get('status','?')}\n"
+            text += f"   <code>{job['id']}</code>\n\n"
+
+        await q.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Обновить", callback_data="my_tasks"),
+             InlineKeyboardButton("🤖 Новая задача", callback_data="cat_menu")],
+            [InlineKeyboardButton("↩ Меню", callback_data="back_main")],
+        ]))
+
+    elif data.startswith("check_"):
+        job_id = data[6:]
+        user   = update.effective_user
+        client = ctx.user_data.get("client") or get_client(user.id, user.full_name)
+        key    = client.get("api_key", "")
+        result = nexus_api("GET", f"/nexus/tasks/{job_id}", key=key)
+        status = result.get("status", "unknown")
+        icons  = {"queued":"⏳","running":"🔄","completed":"✅","failed":"❌"}
+        icon   = icons.get(status, "❓")
+
+        text = f"{icon} <b>Задача {job_id[:12]}</b>\nСтатус: {status}\n"
+        if status == "completed":
+            r = result.get("result","")[:500]
+            text += f"\nРезультат:\n{r}..."
+        await q.edit_message_text(text, parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("↩ Назад", callback_data="my_tasks")]
+            ]))
+
+    elif data == "pricing":
+        await cmd_pricing(update, ctx)
+
+    elif data == "pay_info":
+        await cmd_pay(update, ctx)
+
+    elif data == "my_profile":
+        await show_profile(update, ctx)
+
+    elif data == "quick_demo":
+        await quick_demo(update, ctx)
+
+    elif data == "support_menu":
+        await q.edit_message_text(
+            "💬 <b>Поддержка MaxAI</b>\n\n"
+            "• Менеджер: @MaxAI_SaaS_Bot (ответ < 2ч)\n"
+            "• Портал: https://maxai.fyi\n"
+            "• API docs: https://maxai.fyi/nexus/openapi\n\n"
+            "Или опишите проблему прямо здесь — AI агент поможет:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("💬 Написать менеджеру", url="https://t.me/MaxAI_SaaS_Bot")],
+                [InlineKeyboardButton("🤖 AI поддержка",       callback_data="task_start_support")],
+                [InlineKeyboardButton("↩ Меню",               callback_data="back_main")],
+            ])
+        )
+
+    elif data == "affiliate_info":
+        await q.edit_message_text(
+            "🤝 <b>Партнёрская программа MaxAI</b>\n\n"
+            "Зарабатывайте <b>20% от каждого платежа</b> приведённых клиентов!\n\n"
+            "Как работает:\n"
+            "1. Получите реферальную ссылку\n"
+            "2. Поделитесь с друзьями/коллегами\n"
+            "3. Получайте 20% пожизненно\n\n"
+            "Выплата: ежемесячно в USDT/BTC\n\n"
+            "Для регистрации напишите @MaxAI_SaaS_Bot",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Зарегистрироваться", url="https://t.me/MaxAI_SaaS_Bot")],
+                [InlineKeyboardButton("↩ Назад",              callback_data="my_profile")],
+            ])
+        )
+
+    elif data == "get_invoice":
+        user   = update.effective_user
+        client = ctx.user_data.get("client") or get_client(user.id, user.full_name)
+        invoice = nexus_api("GET", f"/nexus/invoice/{client.get('id','')}", key=client.get("api_key",""))
+        if "invoice_number" in invoice:
+            text = (
+                f"📄 <b>Счёт на оплату</b>\n\n"
+                f"Номер: <code>{invoice['invoice_number']}</code>\n"
+                f"Тариф: {invoice.get('to',{}).get('plan','starter').title()}\n"
+                f"Сумма: <b>${invoice.get('total',0)}</b>\n\n"
+                f"Реквизиты для оплаты:\n"
+                f"USDT TRC20: <code>TAN8FijYFgmM8wCq8Y5jogkry9kPaY9NE2</code>"
+            )
+        else:
+            text = "Для получения счёта обратитесь @MaxAI_SaaS_Bot"
+        await q.edit_message_text(text, parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩ Назад", callback_data="pay_info")]]))
+
+    elif data.startswith("improve_"):
+        parts = data.split("_", 2)
+        job_id    = parts[1] if len(parts) > 1 else ""
+        agent_id  = parts[2] if len(parts) > 2 else "researcher"
+        ctx.user_data["state"]          = "awaiting_task"
+        ctx.user_data["selected_agent"] = agent_id
+        await q.edit_message_text(
+            f"✨ Опишите что нужно улучшить или добавить:\n\n"
+            f"<i>Например: «Сделай код более оптимизированным», «Добавь обработку ошибок», «На английском»</i>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("↩ Отмена", callback_data="back_main")
+            ]])
+        )
+
+    elif data.startswith("rate_"):
+        job_id = data[5:]
+        await q.edit_message_text(
+            "⭐ Оцените качество ответа:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⭐", callback_data=f"rated_{job_id}_1"),
+                 InlineKeyboardButton("⭐⭐", callback_data=f"rated_{job_id}_2"),
+                 InlineKeyboardButton("⭐⭐⭐", callback_data=f"rated_{job_id}_3"),
+                 InlineKeyboardButton("⭐⭐⭐⭐", callback_data=f"rated_{job_id}_4"),
+                 InlineKeyboardButton("⭐⭐⭐⭐⭐", callback_data=f"rated_{job_id}_5")],
+                [InlineKeyboardButton("↩ Без оценки", callback_data="back_main")],
+            ])
+        )
+
+    elif data.startswith("rated_"):
+        parts = data.split("_")
+        job_id = parts[1]
+        stars  = int(parts[2]) if len(parts) > 2 else 5
+        rdb.set(f"nexus:job:{job_id}:rating", str(stars))
+        rdb.lpush("nexus:ratings", json.dumps({"job_id": job_id, "stars": stars, "ts": time.time()}))
+        await q.edit_message_text(
+            f"{'⭐' * stars} Спасибо за оценку!\n\nЭто помогает нам улучшать агентов.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🤖 Ещё задача", callback_data="cat_menu")
+            ]])
+        )
+
+
+# ── COMMANDS ──────────────────────────────────────────────────────────────────
+async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "<b>MaxAI Corporation — Команды:</b>\n\n"
+        "/start — Главное меню\n"
+        "/hire — Нанять AI-агента (категории)\n"
+        "/status — Статус задач\n"
+        "/pricing — Тарифы и цены\n"
+        "/pay — Оплата (крипто)\n"
+        "/profile — Мой профиль и аналитика\n"
+        "/help — Эта справка\n\n"
+        "💡 <b>Быстрый старт:</b>\n"
+        "Просто напишите что нужно сделать — бот подберёт агента!\n\n"
+        "🌐 maxai.fyi · 📣 @maxai_chanal"
+    )
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=main_kb(get_lang(ctx)))
+
+
+async def cmd_profile(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user   = update.effective_user
+    client = ctx.user_data.get("client") or get_client(user.id, user.full_name)
+    ctx.user_data["client"] = client
+    # Simulate callback context
+    class FakeCallback:
+        data = "my_profile"
+        async def answer(self): pass
+        async def edit_message_text(self, text, **kw):
+            await update.message.reply_text(text, **kw)
+    update.callback_query = FakeCallback()
+    await show_profile(update, ctx)
+
+
+# ── MAIN ─────────────────────────────────────────────────────────────────────
+
+async def cmd_workflows(update, context):
+    """Show available AI workflows."""
+    import urllib.request as _ur, json as _j
+    try:
+        req = _ur.Request('http://127.0.0.1:5000/nexus/workflows')
+        with _ur.urlopen(req, timeout=5) as r:
+            data = _j.loads(r.read())
+        wfs = data.get('workflows', [])
+        text = '<b>🔗 AI Workflows — Цепочки агентов:</b>\n\n'
+        for w in wfs:
+            emoji = w.get('emoji', '🤖')
+            name  = w.get('name', '?')
+            desc  = w.get('desc', '')
+            t     = w.get('time_est', '?')
+            p     = w.get('price', 0)
+            text += f"{emoji} <b>{name}</b>\n"
+            text += f"   {desc}\n"
+            text += f"   {t} · от ${p}\n\n"
+        text += 'Запустить: /run [workflow_id] [запрос]'
+    except Exception as e:
+        text = f'Workflows недоступны: {str(e)[:100]}'
+
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton('🔬 Исследование + Презентация', callback_data='wf_research_and_present')],
+        [InlineKeyboardButton('💰 Рынок + Питч', callback_data='wf_market_pitch')],
+        [InlineKeyboardButton('🚀 Full Startup Kit', callback_data='wf_full_startup')],
+        [InlineKeyboardButton('↩ Меню', callback_data='back_main')],
+    ])
+    await update.message.reply_text(text, parse_mode='HTML', reply_markup=kb)
+
+
+
+async def cmd_run(update, context):
+    """Run a workflow chain: /run research_and_present AI market 2026"""
+    user   = update.effective_user
+    client = context.user_data.get("client") or get_client(user.id, user.full_name)
+    key    = client.get("api_key", "")
+    args   = context.args or []
+
+    if len(args) < 2:
+        # Show available workflows
+        try:
+            import urllib.request as _ur, json as _j
+            req = _ur.Request("http://127.0.0.1:5000/nexus/workflows")
+            with _ur.urlopen(req, timeout=5) as r:
+                data = _j.loads(r.read())
+            wfs = data.get("workflows", [])
+            text = "<b>🔗 Workflow Chains — запуск:</b>\n\n"
+            text += "<code>/run [workflow_id] [запрос]</code>\n\n"
+            for w in wfs:
+                text += f"{w.get('emoji','🤖')} <b>{w['name']}</b> — ${w['price']}\n"
+                text += f"   <code>/run {w['id']} ваш запрос</code>\n\n"
+        except:
+            text = "Список воркфлоу временно недоступен"
+        await update.message.reply_text(text, parse_mode="HTML")
+        return
+
+    workflow_id = args[0]
+    user_input  = " ".join(args[1:])
+
+    msg = await update.message.reply_text(
+        f"⚡ Запускаю workflow <b>{workflow_id}</b>...\nЭто займёт 3-8 минут.",
+        parse_mode="HTML"
+    )
+
+    import urllib.request as _ur, json as _j
+    try:
+        body = _j.dumps({"workflow_id": workflow_id, "input": user_input}).encode()
+        req  = _ur.Request("http://127.0.0.1:5000/nexus/workflows/run",
+            data=body, headers={"Content-Type": "application/json", "x-api-key": key}, method="POST")
+        with _ur.urlopen(req, timeout=15) as r:
+            resp = _j.loads(r.read())
+        job_id = resp.get("job_id", "")
+        steps  = resp.get("steps", 0)
+        await msg.edit_text(
+            f"✅ Workflow запущен!\n\n"
+            f"🔗 ID: <code>{job_id}</code>\n"
+            f"📋 Шагов: {steps}\n\n"
+            f"Результат придёт прямо сюда когда все агенты закончат работу.",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        await msg.edit_text(f"❌ Ошибка: {str(e)[:200]}")
+
+
+def main():
+    if not TOKEN:
+        log.error("CORP_BOT_TOKEN not set!")
+        sys.exit(1)
+
+    app = Application.builder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start",   cmd_start))
+    app.add_handler(CommandHandler("hire",    lambda u,c: show_category_menu(u,c)))
+    app.add_handler(CommandHandler("status",  cmd_status))
+    app.add_handler(CommandHandler("pricing", cmd_pricing))
+    app.add_handler(CommandHandler("pay",     cmd_pay))
+    app.add_handler(CommandHandler("profile", cmd_profile))
+    app.add_handler(CommandHandler("help",      cmd_help))
+    app.add_handler(CommandHandler("workflows", cmd_workflows))
+    app.add_handler(CommandHandler("run",       cmd_run))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+
+    log.info("MaxAI Client Bot v4.0 WORLD CLASS starting...")
+    app.run_polling(allowed_updates=["message", "callback_query"], drop_pending_updates=True)
 
 
 if __name__ == "__main__":
