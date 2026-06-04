@@ -1,3 +1,6 @@
+import os
+from dotenv import load_dotenv
+load_dotenv('/root/my_personal_ai/.env')
 #!/usr/bin/env python3
 """
 funding_arb_agent.py — Funding Rate Arbitrage Agent
@@ -16,9 +19,9 @@ from urllib.error import HTTPError
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
 log = logging.getLogger('funding_arb')
 
-API_KEY    = 'O8NZsb1QOlQET3c3kH'
-API_SECRET = 'Nt5ZdXPNrJvGQQg6DMeBkcDtdRpMhEybhHHQ'
-TG_TOKEN   = '8428552836:AAHRCJZf3G30LSe8vuXpVTwr_mPrzVJVIWM'
+API_KEY    = os.getenv('BYBIT_API_KEY', '')  # from master .env
+API_SECRET = os.getenv('BYBIT_API_SECRET','')
+TG_TOKEN   = '8849616091:AAEReIChr8WS4cC1sdqOXrvFdEwf3syu8YM'
 TG_CHAT    = '1985320458'
 BASE       = 'https://api.bybit.com'
 STATE_FILE = Path('/root/my_personal_ai/data/funding_arb_state.json')

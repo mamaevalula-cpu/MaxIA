@@ -124,7 +124,7 @@ project_tasks = {
          '6) Если всё работает — придумай и реализуй ОДНО улучшение для Hyperion v12 '
          '(например: новый endpoint, улучшение валидации, добавить метрику в dashboard)\n'
          '7) Сохрани отчёт: echo результаты > /root/my_personal_ai/data/hyperion_v12_dev_log.json\n'
-         '8) Отправь краткий отчёт в Telegram через BOT_TOKEN=8428552836:AAHRCJZf3G30LSe8vuXpVTwr_mPrzVJVIWM CHAT_ID=1985320458\n'
+         '8) Отправь краткий отчёт в Telegram через BOT_TOKEN=8849616091:AAEReIChr8WS4cC1sdqOXrvFdEwf3syu8YM CHAT_ID=1985320458\n'
          'ДЕЙСТВУЙ, не планируй. Отчитайся о каждом шаге.'),
 
     # ── Wildberries ───────────────────────────────────────────────

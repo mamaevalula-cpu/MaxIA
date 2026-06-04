@@ -109,7 +109,7 @@ def ask_direct(text):
     """Direct DeepSeek/OpenAI fallback."""
     key = ENV.get("DEEPSEEK_API_KEY") or ENV.get("OPENAI_API_KEY", "")
     if not key:
-        return "AI временно недоступен. Панель: http://77.90.2.171"
+        return "AI временно недоступен. Панель: https://maxai.fyi"
     url   = "https://api.deepseek.com/v1/chat/completions" if ENV.get("DEEPSEEK_API_KEY") else "https://api.openai.com/v1/chat/completions"
     model = "deepseek-chat" if ENV.get("DEEPSEEK_API_KEY") else "gpt-3.5-turbo"
     try:
@@ -129,7 +129,7 @@ def ask_direct(text):
             return json.loads(r.read())["choices"][0]["message"]["content"].strip()
     except Exception as e:
         log.error("Direct AI error: %s", e)
-        return "AI временно недоступен. Панель: http://77.90.2.171"
+        return "AI временно недоступен. Панель: https://maxai.fyi"
 
 
 # ── Commands ──────────────────────────────────────────────────────────────────
@@ -156,9 +156,9 @@ def cmd_status(chat_id):
             "<b>Система работает</b>\n\n"
             f"Агентов: {agents}\n"
             "Telegram бот: 24/7\n"
-            "Панель: http://77.90.2.171")
+            "Панель: https://maxai.fyi")
     except Exception:
-        send(chat_id, "Система работает\nТelegram: OK\nПанель: http://77.90.2.171")
+        send(chat_id, "Система работает\nТelegram: OK\nПанель: https://maxai.fyi")
 
 
 def cmd_subscribe(chat_id):
@@ -186,7 +186,7 @@ def cmd_help(chat_id):
         "/subscribe - ссылки оплаты\n"
         "/balance - баланс Bybit\n\n"
         "Напиши любое сообщение - AI ответит!\n"
-        "Панель: http://77.90.2.171")
+        "Панель: https://maxai.fyi")
 
 
 def cmd_balance(chat_id):
@@ -265,7 +265,7 @@ def main():
     log.info("Connected: @%s", bot_name)
 
     # Notify owner
-    send(OWNER_ID, f"@{bot_name} запущен — работает 24/7\nПанель: http://77.90.2.171")
+    send(OWNER_ID, f"@{bot_name} запущен — работает 24/7\nПанель: https://maxai.fyi")
 
     offset     = None
     fail_count = 0

@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s',
               logging.FileHandler('/root/my_personal_ai/logs/fl_ru_agent.log')])
 log = logging.getLogger('fl')
 
-TG_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8428552836:AAHRCJZf3G30LSe8vuXpVTwr_mPrzVJVIWM')
+TG_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8849616091:AAEReIChr8WS4cC1sdqOXrvFdEwf3syu8YM')
 TG_CHAT  = os.environ.get('TELEGRAM_CHAT_ID', '1985320458')
 EMAIL    = os.environ.get('FL_EMAIL', os.environ.get('KWORK_EMAIL', 'froggyinternet@gmail.com'))
 PASSWORD = os.environ.get('FL_PASSWORD', os.environ.get('KWORK_PASSWORD', 'Internetinternet!2'))

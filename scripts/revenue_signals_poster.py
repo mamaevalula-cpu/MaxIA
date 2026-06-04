@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 log = logging.getLogger('signals_poster')
 
 TRADING_URL = 'http://127.0.0.1:8001'
-BOT_TOKEN   = os.environ.get('TELEGRAM_BOT_TOKEN', '8428552836:AAHRCJZf3G30LSe8vuXpVTwr_mPrzVJVIWM')
+BOT_TOKEN   = os.environ.get('TELEGRAM_BOT_TOKEN', '8849616091:AAEReIChr8WS4cC1sdqOXrvFdEwf3syu8YM')
 CHAT_ID     = os.environ.get('TELEGRAM_CHAT_ID', '1985320458')
 # Public channel for free signals (use your channel @username or ID)
 CHANNEL_ID  = os.environ.get('SIGNALS_CHANNEL_ID', CHAT_ID)

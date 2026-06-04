@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s',
               logging.FileHandler('/root/my_personal_ai/logs/avito_agent.log')])
 log = logging.getLogger('avito')
 
-TG_TOKEN = '8428552836:AAHRCJZf3G30LSe8vuXpVTwr_mPrzVJVIWM'
+TG_TOKEN = '8849616091:AAEReIChr8WS4cC1sdqOXrvFdEwf3syu8YM'
 TG_CHAT  = '1985320458'
 STATE_FILE = Path('/root/my_personal_ai/data/avito_state.json')
 

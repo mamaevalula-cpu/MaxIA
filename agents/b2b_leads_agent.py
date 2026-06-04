@@ -9,7 +9,7 @@ from pathlib import Path
 from datetime import datetime
 
 log = logging.getLogger("agents.b2b_leads")
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN","8428552836:AAHRCJZf3G30LSe8vuXpVTwr_mPrzVJVIWM")
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN","8849616091:AAEReIChr8WS4cC1sdqOXrvFdEwf3syu8YM")
 CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID","1985320458")
 DATA_FILE = Path("/root/my_personal_ai/data/b2b_leads.json")
 CATALOG   = Path("/root/my_personal_ai/data/agent_catalog.json")

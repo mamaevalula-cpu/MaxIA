@@ -342,7 +342,7 @@ def main():
     # Notify via Telegram
     try:
         import os
-        token = os.environ.get('TELEGRAM_BOT_TOKEN', '8428552836:AAHRCJZf3G30LSe8vuXpVTwr_mPrzVJVIWM')
+        token = os.environ.get('TELEGRAM_BOT_TOKEN', '8849616091:AAEReIChr8WS4cC1sdqOXrvFdEwf3syu8YM')
         chat_id = os.environ.get('TELEGRAM_CHAT_ID', '1985320458')
         msg = (
             f"🧠 <b>MaxAI Daily Learning</b> — {today}\n"

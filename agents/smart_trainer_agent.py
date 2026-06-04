@@ -10,7 +10,7 @@ from pathlib import Path
 from datetime import datetime
 
 log = logging.getLogger("agents.smart_trainer")
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN","8428552836:AAHRCJZf3G30LSe8vuXpVTwr_mPrzVJVIWM")
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN","8849616091:AAEReIChr8WS4cC1sdqOXrvFdEwf3syu8YM")
 CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID","1985320458")
 TRAINING_LOG = Path("/root/my_personal_ai/data/smart_training_log.json")
 ERROR_LOG = Path("/root/my_personal_ai/logs/errors.log")

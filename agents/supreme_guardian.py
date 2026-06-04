@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.request import urlopen, Request
 
 # ─── Config ────────────────────────────────────────────────────────────────
-TG_TOKEN  = '8428552836:AAHRCJZf3G30LSe8vuXpVTwr_mPrzVJVIWM'
+TG_TOKEN  = '8849616091:AAEReIChr8WS4cC1sdqOXrvFdEwf3syu8YM'
 TG_CHAT   = '1985320458'
 CHECK_INTERVAL = 120   # seconds between full checks
 ALERT_COOLDOWN = 600   # don't repeat same alert within 10min

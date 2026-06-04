@@ -7,7 +7,7 @@ Checks every 60 seconds. Sends Telegram alert only on state change.
 import subprocess, time, urllib.request, urllib.parse, json, os, sys
 from datetime import datetime
 
-BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8428552836:AAHRCJZf3G30LSe8vuXpVTwr_mPrzVJVIWM')
+BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8849616091:AAEReIChr8WS4cC1sdqOXrvFdEwf3syu8YM')
 CHAT_ID   = os.environ.get('TELEGRAM_CHAT_ID',   '1985320458')
 
 SERVICES = {

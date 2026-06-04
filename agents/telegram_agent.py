@@ -146,7 +146,7 @@ class TelegramAgent(object):
         self.log = logging.getLogger("agents.telegram")
         self._bot_token = os.environ.get(
             "TELEGRAM_BOT_TOKEN",
-            "8428552836:AAHRCJZf3G30LSe8vuXpVTwr_mPrzVJVIWM"
+            "8849616091:AAEReIChr8WS4cC1sdqOXrvFdEwf3syu8YM"
         )
         self._chat_id = os.environ.get("TELEGRAM_CHAT_ID", "1985320458")
         self.log.info("TelegramAgent ready")

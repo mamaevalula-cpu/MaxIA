@@ -6871,26 +6871,28 @@ def register(app):
     # ── Trading signals ─────────────────────────────────────────────────────────
     @app.get("/api/trading/signals")
     async def api_trading_signals():
-        """V4 FIX: reads signals from V4 bot logs."""
-        import redis as _rsig, json as _jsig
-        _r = _rsig.from_url("redis://127.0.0.1:6379/0", decode_responses=True)
+        """V4: reads signals from bot log and Redis."""
+        import subprocess as _sp2
+        import redis as _rsig2
+        _r2 = _rsig2.from_url("redis://127.0.0.1:6379/0", decode_responses=True)
         signals = []
-        # Get last signal from V4 bot log
         try:
-            import subprocess as _sp
-            out = _sp.run(
-                ["grep", "-E", "SIGNAL|WAIT", "/root/bybit-bot/logs/live_runner.log"],
-                capture_output=True, text=True
-            ).stdout.splitlines()
-            for line in out[-10:]:
-                if "SIGNAL" in line or "WAIT" in line:
-                    signals.append({"text": line.strip()[-120:], "source": "V4"})
+            out2 = _sp2.run(["tail", "-n", "80", "/root/bybit-bot/logs/live_runner.log"],
+                capture_output=True, text=True).stdout
+            cur_pair2 = None
+            for ln2 in out2.splitlines():
+                if "Анализ" in ln2:
+                    import re as _re2
+                    mm = _re2.search("Анализ (\\w+)", ln2)
+                    if mm: cur_pair2 = mm.group(1)
+                elif cur_pair2 and any(x in ln2 for x in ["С1","С2","С3","WAIT","SIGNAL","ADX","RSI"]):
+                    signals.append({"pair": cur_pair2, "text": ln2.strip()[-90:], "src": "V4"})
         except Exception:
             pass
-        return {"signals": signals[-5:] if signals else [], "v4": True}
+        bal2 = float(_r2.get("bybit:balance_usdt") or 0)
+        return {"signals": signals[-12:], "v4": True, "balance": bal2,
+                "mode": "LIVE", "pairs": ["ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT"]}
 
-    # ── Config (masked) ─────────────────────────────────────────────────────────
-    @app.get("/api/config")
     async def api_config():
         try:
             from core.apexmind_core import MaxAICore

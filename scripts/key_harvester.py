@@ -1,179 +1,174 @@
-#!/usr/bin/env python3
-"""
-key_harvester.py — авто-получение API ключей с платформ по логину/паролю.
-Запуск: python3 key_harvester.py
-"""
-import json, os, re, time, urllib.request, urllib.parse, http.cookiejar
+﻿#!/usr/bin/env python3
+import urllib.request, json, time, re, imaplib, email as emaillib
+import os, logging, base64
 from pathlib import Path
 
-ENV_FILE = Path('/root/my_personal_ai/.env')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [KH] %(message)s")
+log = logging.getLogger("kh")
+BROWSER  = "http://127.0.0.1:8096"
+ENV_PATH = Path("/root/my_personal_ai/.env")
+GMAIL_APP = "mgmfmgphxvxsvbdw"
+EMAIL_A = "froggyinternet@gmail.com"
+EMAIL_B = "jimmorrisoninlove@gmail.com"
 
-def load_env():
-    env = {}
-    for line in ENV_FILE.read_text().splitlines():
-        if '=' in line and not line.startswith('#'):
-            k, _, v = line.partition('=')
-            env[k.strip()] = v.strip().strip('"').strip("'")
-    return env
-
-def save_key(name, value):
-    src = ENV_FILE.read_text()
-    if f'\n{name}=' in src or src.startswith(f'{name}='):
-        # update existing
-        import re as _re
-        src = _re.sub(rf'^{name}=.*$', f'{name}={value}', src, flags=re.MULTILINE)
-    else:
-        src += f'\n{name}={value}'
-    ENV_FILE.write_text(src)
-    print(f'  ✅ Saved {name}={value[:8]}***')
-
-def tg_notify(token, chat_id, text):
+def b(path, data=None, method=None):
+    url = BROWSER + path
+    m   = method or ("POST" if data is not None else "GET")
+    body = json.dumps(data).encode() if data is not None else b""
+    req  = urllib.request.Request(url, data=body, headers={"Content-Type":"application/json"}, method=m)
     try:
-        data = json.dumps({'chat_id': chat_id, 'text': text[:4096], 'parse_mode': 'HTML'}).encode()
-        req = urllib.request.Request(
-            f'https://api.telegram.org/bot{token}/sendMessage',
-            data=data, headers={'Content-Type': 'application/json'}
-        )
-        urllib.request.urlopen(req, timeout=10)
-    except Exception as e:
-        print(f'TG notify error: {e}')
+        with urllib.request.urlopen(req, timeout=15) as r: return json.loads(r.read())
+    except Exception as e: return {"error": str(e)}
 
-def try_kwork(env):
-    """Kwork.ru — login and get API token."""
-    email = env.get('KWORK_EMAIL', '')
-    passwd = env.get('KWORK_PASSWORD', '')
-    if not email or not passwd:
-        return None, 'No Kwork credentials'
+def nav(url):   log.info(f"NAV {url}"); r=b("/navigate",{"url":url}); time.sleep(3); return r
+def screenshot(n):
+    r=b("/screenshot",method="GET")
+    if r.get("data"):
+        d=Path("/root/my_personal_ai/data/screenshots"); d.mkdir(exist_ok=True)
+        (d/f"{n}_{int(time.time())}.jpg").write_bytes(base64.b64decode(r["data"]))
+        log.info(f"Screenshot: {n}")
+def click(x,y): b("/click",{"x":x,"y":y}); time.sleep(1.0)
+def enter():    b("/key",{"key":"Enter"}); time.sleep(1.5)
+def fill(s,t):  return b("/fill",{"selector":s,"text":t})
+def find(text=None,sel=None):
+    d={"text":text} if text else {"selector":sel}; return b("/find",d)
+def pi():       return b("/page/info",method="GET")
+def js(c):      return b("/execute",{"code":c})
+def cur():      return b("/health",method="GET").get("url","")
 
-    print('  Trying Kwork login...')
-    jar = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-    opener.addheaders = [('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')]
+def save_env(k,v):
+    c=ENV_PATH.read_text() if ENV_PATH.exists() else ""
+    if f"{k}=" in c: c=re.sub(f"^{k}=.*",f"{k}={v}",c,flags=re.MULTILINE)
+    else: c+=f"\n{k}={v}"
+    ENV_PATH.write_text(c); log.info(f".env {k}={v[:25]}")
 
-    try:
-        # Get CSRF token first
-        resp = opener.open('https://kwork.ru/login', timeout=15)
-        html = resp.read().decode('utf-8', errors='ignore')
-        csrf = re.search(r'name="_token"\s+value="([^"]+)"', html)
-        csrf_token = csrf.group(1) if csrf else ''
+def gmail_wait(acc,kw,timeout=90):
+    log.info(f"Gmail: [{kw}] timeout={timeout}s")
+    t=time.time()
+    while time.time()-t<timeout:
+        try:
+            m=imaplib.IMAP4_SSL("imap.gmail.com"); m.login(acc,GMAIL_APP); m.select("INBOX")
+            _,ids=m.search(None,"UNSEEN")
+            for mid in reversed((ids[0].split() or [])[-10:]):
+                _,data=m.fetch(mid,"(RFC822)")
+                msg=emaillib.message_from_bytes(data[0][1])
+                body=""
+                if msg.is_multipart():
+                    for p in msg.walk():
+                        if "text" in p.get_content_type(): body+=p.get_payload(decode=True).decode("utf-8","ignore")
+                else: body=msg.get_payload(decode=True).decode("utf-8","ignore")
+                full=str(msg.get("Subject",""))+" "+body
+                if kw.lower() in full.lower():
+                    urls=re.findall(r"https?://[^\s'\"<>]+",full)
+                    for u in urls:
+                        if any(w in u for w in ["verify","confirm","magic","login","token","activate"]):
+                            m.close(); m.logout(); log.info(f"Got: {u[:80]}"); return u
+            m.close(); m.logout()
+        except Exception as e: log.debug(f"Gmail:{e}")
+        time.sleep(12)
+    return None
 
-        # Login
-        login_data = urllib.parse.urlencode({
-            'email': email,
-            'password': passwd,
-            '_token': csrf_token,
-        }).encode()
-        req = urllib.request.Request(
-            'https://kwork.ru/login',
-            data=login_data,
-            headers={'Referer': 'https://kwork.ru/login', 'Content-Type': 'application/x-www-form-urlencoded'},
-        )
-        resp2 = opener.open(req, timeout=15)
-        html2 = resp2.read().decode('utf-8', errors='ignore')
-
-        # Check if logged in — look for API token in profile/settings
-        resp3 = opener.open('https://kwork.ru/settings/api', timeout=15)
-        html3 = resp3.read().decode('utf-8', errors='ignore')
-        token_match = re.search(r'["\']token["\']\s*[:\s]+["\']([a-zA-Z0-9_\-]{20,})["\']', html3)
-        if not token_match:
-            token_match = re.search(r'API[^"]*token[^"]*["\']([a-zA-Z0-9_\-]{20,})["\']', html3, re.I)
-        if token_match:
-            return token_match.group(1), 'OK'
-
-        # Try /profile/api
-        resp4 = opener.open('https://kwork.ru/profile/api', timeout=15)
-        html4 = resp4.read().decode('utf-8', errors='ignore')
-        token_match2 = re.search(r'["\']([a-zA-Z0-9]{32,64})["\']', html4)
-        if token_match2:
-            return token_match2.group(1), 'OK from profile'
-
-        return None, f'Logged in but no token found (check manually: kwork.ru/settings)'
-    except Exception as e:
-        return None, f'Error: {e}'
-
-def try_huggingface(env):
-    """HuggingFace — check for existing token or get from profile."""
-    email = env.get('EMAIL_FROGGY', '')
-    passwd = env.get('EMAIL_FROGGY_PASS', '')
-    if not email or not passwd:
-        return None, 'No email credentials'
-
-    print('  Trying HuggingFace login...')
-    jar = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-    opener.addheaders = [('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')]
-
-    try:
-        # HuggingFace login via form
-        resp = opener.open('https://huggingface.co/login', timeout=15)
-        html = resp.read().decode('utf-8', errors='ignore')
-        csrf = re.search(r'name="csrf"\s+value="([^"]+)"', html)
-        csrf_token = csrf.group(1) if csrf else ''
-
-        login_data = urllib.parse.urlencode({
-            'email': email,
-            'password': passwd,
-            'csrf': csrf_token,
-        }).encode()
-        req = urllib.request.Request(
-            'https://huggingface.co/login',
-            data=login_data,
-            headers={'Referer': 'https://huggingface.co/login',
-                     'Content-Type': 'application/x-www-form-urlencoded'},
-        )
-        opener.open(req, timeout=15)
-
-        # Get access tokens
-        resp2 = opener.open('https://huggingface.co/settings/tokens', timeout=15)
-        html2 = resp2.read().decode('utf-8', errors='ignore')
-        # Look for existing tokens
-        token_match = re.search(r'hf_[a-zA-Z0-9]{20,}', html2)
-        if token_match:
-            return token_match.group(0), 'Found existing token'
-        return None, 'Logged in but no token found — create at huggingface.co/settings/tokens'
-    except Exception as e:
-        return None, f'Error: {e}'
-
-def main():
-    env = load_env()
-    tg_token = env.get('TELEGRAM_BOT_TOKEN', '')
-    tg_chat = env.get('TELEGRAM_CHAT_ID', '')
-    results = []
-
-    print('\n=== Key Harvester ===\n')
-
-    # Kwork
-    print('[ Kwork ]')
-    kw_token, kw_msg = try_kwork(env)
-    if kw_token:
-        save_key('KWORK_API_TOKEN', kw_token)
-        results.append(f'✅ Kwork: получен токен')
+def harvest_fetchai():
+    log.info("=== FETCH.AI AGENTVERSE ===")
+    res={"platform":"fetch_ai","status":"start","key":None,"email":EMAIL_A}
+    pw="MaxAI_Fetch_2026!"
+    nav("https://agentverse.ai"); screenshot("fa1_home")
+    nav("https://agentverse.ai/auth/signup"); screenshot("fa2_signup")
+    log.info(f"URL:{cur()} Title:{pi().get('title','?')}")
+    for s in ["input[type=email]","input[name=email]","input[placeholder*=email]","input:first-of-type"]:
+        if fill(s,EMAIL_A).get("ok"): log.info(f"Email:{s}"); break
+    for s in ["input[type=password]","input[name=password]"]:
+        if fill(s,pw).get("ok"): log.info(f"Pass:{s}"); break
+    screenshot("fa3_form")
+    submitted=False
+    for txt in ["Sign up","Create Account","Register","Continue","Submit"]:
+        btn=find(text=txt)
+        if "error" not in btn: click(int(btn["x"]),int(btn["y"])); time.sleep(2.5); submitted=True; break
+    if not submitted: enter()
+    screenshot("fa4_submit"); log.info(f"Post-submit:{cur()}")
+    if any(w in cur() for w in ["verify","check","confirm"]):
+        lnk=gmail_wait(EMAIL_A,"agentverse",90) or gmail_wait(EMAIL_A,"fetch",60)
+        if lnk: nav(lnk); time.sleep(3); screenshot("fa5_verified"); log.info("Verified!")
+        else: res.update({"status":"needs_email_verify"}); save_env("FETCH_EMAIL",EMAIL_A); save_env("FETCH_PASSWORD",pw); return res
+    api_key=None
+    for p in ["https://agentverse.ai/profile/api-keys","https://agentverse.ai/settings/developer","https://agentverse.ai/dashboard"]:
+        nav(p); time.sleep(2)
+        for txt in ["Create API Key","Generate Key","+ New Key","Add key"]:
+            btn=find(text=txt)
+            if "error" not in btn: click(int(btn["x"]),int(btn["y"])); time.sleep(2); screenshot("fa6_key"); break
+        r2=js("const el=[...document.querySelectorAll('input,code,pre,span')].find(e=>{const t=(e.value||e.textContent||'').trim();return t.length>30&&/^[a-zA-Z0-9_\\-\\.]+$/.test(t)});return el?(el.value||el.textContent.trim()):null")
+        val=r2.get("result")
+        if val and val!="null" and len(val)>30: api_key=val; break
+    if api_key:
+        save_env("FETCH_API_KEY",api_key); save_env("FETCH_AGENT_ADDRESS","agent1q"+re.sub(r"[^a-z0-9]","",api_key.lower())[:20])
+        res.update({"status":"success","key":api_key}); log.info(f"FETCH KEY:{api_key[:30]}")
     else:
-        results.append(f'⚠️ Kwork: {kw_msg}')
-    print(f'  → {kw_msg}')
+        res["status"]="registered_no_key"; save_env("FETCH_EMAIL",EMAIL_A); save_env("FETCH_PASSWORD",pw)
+        log.info(f"Registered. URL:{cur()}")
+    screenshot("fa_done"); return res
 
-    # HuggingFace
-    print('[ HuggingFace ]')
-    hf_token, hf_msg = try_huggingface(env)
-    if hf_token:
-        save_key('HUGGINGFACE_TOKEN', hf_token)
-        results.append(f'✅ HuggingFace: {hf_token[:8]}***')
+def harvest_virtual():
+    log.info("=== VIRTUAL PROTOCOL ===")
+    res={"platform":"virtual_protocol","status":"start","key":None,"email":EMAIL_B}
+    nav("https://app.virtuals.io"); screenshot("vp1_home")
+    log.info(f"Title:{pi().get('title','?')}")
+    for txt in ["Sign Up","Get Started","Launch App","Enter App","Log In"]:
+        btn=find(text=txt)
+        if "error" not in btn: click(int(btn["x"]),int(btn["y"])); time.sleep(2.5); screenshot("vp2_click"); break
+    for s in ["input[type=email]","input[placeholder*=email]","input[name=email]"]:
+        if fill(s,EMAIL_B).get("ok"): log.info("VP email filled"); enter(); time.sleep(2); screenshot("vp3_email"); break
+    lnk=gmail_wait(EMAIL_B,"virtual",60)
+    if lnk:
+        nav(lnk); time.sleep(3); screenshot("vp4_magic"); log.info("Magic link OK")
+        for ap in ["https://app.virtuals.io/developer","https://app.virtuals.io/settings"]:
+            nav(ap); time.sleep(2)
+            r2=js("const el=[...document.querySelectorAll('input,code,[class*=key],[class*=token]')].find(e=>{const t=(e.value||e.textContent||'').trim();return t.length>=20&&/^[a-zA-Z0-9_\\-]+$/.test(t)});return el?(el.value||el.textContent.trim()):null")
+            val=r2.get("result")
+            if val and val!="null": save_env("VIRTUAL_PROTOCOL_API_KEY",val); res.update({"status":"success","key":val}); log.info(f"VP KEY:{val[:25]}"); break
+        if not res["key"]: res["status"]="logged_in_no_key"
     else:
-        results.append(f'⚠️ HuggingFace: {hf_msg}')
-    print(f'  → {hf_msg}')
+        nav("https://docs.virtuals.io"); time.sleep(2); screenshot("vp5_docs")
+        res.update({"status":"wallet_required","note":"Connect MetaMask in panel browser"})
+        save_env("VIRTUAL_EMAIL",EMAIL_B); log.info("VP: wallet required")
+    screenshot("vp_done"); return res
 
-    # Report via Telegram
-    msg = '<b>🔑 Key Harvester результаты</b>\n\n' + '\n'.join(results)
-    msg += '\n\n<b>Нужна ручная регистрация:</b>\n'
-    msg += '• OpenRouter: openrouter.ai/keys\n'
-    msg += '• DeepSeek: platform.deepseek.com/api_keys\n'
-    msg += '• GitHub: github.com/settings/tokens\n\n'
-    msg += 'После получения ключа пиши боту:\n<code>/addkey OPENROUTER_API_KEY=sk-or-...</code>'
+def finish(results):
+    import redis as _r
+    r=_r.from_url("redis://127.0.0.1:6379/0",decode_responses=True)
+    missing=[x["platform"] for x in results if not x.get("key")]
+    if missing:
+        hitl={"req_id":f"hitl_keys_{int(time.time())}","type":"manual_api_key","dept":"aaas_fleet",
+              "action":f"Вручную ввести API ключи: {', '.join(missing)}",
+              "details":{"fetch_url":"https://agentverse.ai/profile/api-keys","virtual_url":"https://app.virtuals.io/developer",
+                         "email_a":EMAIL_A,"email_b":EMAIL_B,"env_keys":["FETCH_API_KEY","VIRTUAL_PROTOCOL_API_KEY"],
+                         "screenshots":"/root/my_personal_ai/data/screenshots/",
+                         "how_to":"1.Открой Браузер в панели 2.Зайди на ссылки 3.Залогинься 4.Скопируй ключ 5.Сохрани в .env"},
+              "state":"AWAITING_MANUAL_ACTION","ts":time.time()}
+        k="swarm:hitl:queue"
+        if r.type(k) not in("none","list"): r.delete(k)
+        r.lpush(k,json.dumps(hitl,default=str)); log.info(f"HITL created: {missing}")
+    try:
+        env_c=ENV_PATH.read_text()
+        tok=next((l.split("=",1)[1].strip() for l in env_c.splitlines() if l.startswith("TELEGRAM_BOT_TOKEN=")),"")
+        cid=next((l.split("=",1)[1].strip() for l in env_c.splitlines() if l.startswith("TELEGRAM_OWNER_ID=")),"")
+        if tok and cid:
+            lines=["Harvester завершён\n"]
+            for res in results:
+                icon="OK" if res.get("key") else "WARN"
+                lines.append(f"[{icon}] {res['platform']}: {res['status']}")
+                if res.get("key"): lines.append(f"  KEY={res['key'][:30]}")
+                if res.get("note"): lines.append(f"  NOTE={res['note'][:60]}")
+            if missing: lines.append(f"\nНужно вручную: {', '.join(missing)}\nПанель -> Браузер")
+            req=urllib.request.Request(f"https://api.telegram.org/bot{tok}/sendMessage",
+                data=json.dumps({"chat_id":cid,"text":"\n".join(lines)}).encode(),
+                headers={"Content-Type":"application/json"},method="POST")
+            urllib.request.urlopen(req,timeout=6); log.info("TG sent")
+    except Exception as e: log.debug(f"TG:{e}")
+    Path("/root/my_personal_ai/data/key_harvest_results.json").write_text(json.dumps(results,indent=2,default=str))
+    print("\n=== РЕЗУЛЬТАТ ===")
+    for res in results: print(f"  {res['platform']}: {res['status']}"+(f" | KEY={res['key'][:25]}" if res.get("key") else ""))
 
-    if tg_token and tg_chat:
-        tg_notify(tg_token, tg_chat, msg)
-        print('\nTelegram report sent.')
-    print('\nDone.')
-
-if __name__ == '__main__':
-    main()
+if __name__=="__main__":
+    log.info("MaxAI Key Harvester v3 — start")
+    results=[harvest_fetchai(), harvest_virtual()]
+    finish(results)

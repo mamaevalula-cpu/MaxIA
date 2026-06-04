@@ -30,7 +30,7 @@ log = logging.getLogger('revenue_executor')
 # ─── Config ────────────────────────────────────────────────────────────────
 API_KEY    = os.environ.get('BYBIT_API_KEY',    'O8NZsb1QOlQET3c3kH')
 API_SECRET = os.environ.get('BYBIT_API_SECRET', 'Nt5ZdXPNrJvGQQg6DMeBkcDtdRpMhEybhHHQ')
-TG_TOKEN   = os.environ.get('TELEGRAM_BOT_TOKEN', '8428552836:AAHRCJZf3G30LSe8vuXpVTwr_mPrzVJVIWM')
+TG_TOKEN   = os.environ.get('TELEGRAM_BOT_TOKEN', '8849616091:AAEReIChr8WS4cC1sdqOXrvFdEwf3syu8YM')
 TG_CHAT    = os.environ.get('TELEGRAM_CHAT_ID',   '1985320458')
 BYBIT_BASE = 'https://api.bybit.com'
 FUNDING_THRESHOLD = 0.0004  # 0.04%/8h (снижено с 0.05% для большей активности)
